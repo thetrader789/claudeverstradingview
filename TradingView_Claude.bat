@@ -2,7 +2,7 @@
 title TradingView + Claude Code Launcher
 
 echo Lancement de TradingView Desktop avec CDP port 9222...
-start "" "C:\Program Files\WindowsApps\TradingView.Desktop_3.1.0.7818_x64__n534cwy3pjxzj\TradingView.exe" --remote-debugging-port=9222
+start "" "C:\Program Files\WindowsApps\TradingView.Desktop_3.2.0.7916_x64__n534cwy3pjxzj\TradingView.exe" --remote-debugging-port=9222
 
 timeout /t 2 /nobreak >nul
 
