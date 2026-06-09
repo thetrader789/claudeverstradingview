@@ -1,0 +1,251 @@
+//@version=6
+strategy("Fair Price Multi-Session", overlay=true, margin_long=5, margin_short=5, max_lines_count=500, max_labels_count=500, slippage=2)
+
+// ─── Inputs ───────────────────────────────────────────────────────────────────
+i_globex     = input.bool(true, "GLOBEX  00:00 CET")
+i_japan      = input.bool(true, "Japan   02:00 CET")
+i_london     = input.bool(true, "London  09:00 CET")
+i_ny         = input.bool(true, "NY      15:30 CET")
+i_pm         = input.bool(true, "PM      18:00 CET")
+i_gapFilter  = input.bool(true, "Gap filter NY (skip cont. against gap)")
+i_prevFilter = input.bool(true, "Prev-session RR filter")
+
+// ─── Persistent state ─────────────────────────────────────────────────────────
+var float refOpen   = na
+var float refClose  = na
+var float prevZoneHigh = na
+var float prevZoneLow  = na
+var float entry_price  = na
+var float stop_price   = na
+var float tp_price     = na
+var int   tradeCount   = 0
+var float lastSwingHigh = na
+var float lastSwingLow  = na
+var line[] swingLines   = array.new_line()
+var bool biasBull = false
+var bool biasBear = false
+var bool gapUp    = false
+var bool gapDown  = false
+
+// Breakeven & blocage re-entrée continuation
+var bool beIsCont        = false
+var bool beTriggered     = false
+var bool contTradeOpened = false
+
+// ─── Time ─────────────────────────────────────────────────────────────────────
+h = hour(time, "Europe/Paris")
+m = minute(time, "Europe/Paris")
+t = h * 60 + m
+
+// ─── Reference candles ────────────────────────────────────────────────────────
+isGlobexRef = i_globex and t == 0
+isJapanRef  = i_japan  and t == 120
+isLondonRef = i_london and t == 540
+isNYRef     = i_ny     and h == 15 and m == 29
+isPMRef     = i_pm     and t == 1080
+isAnyRef    = isGlobexRef or isJapanRef or isLondonRef or isNYRef or isPMRef
+
+isNYOpen = i_ny and t == 930
+
+// ─── Session windows ──────────────────────────────────────────────────────────
+isGlobexCont = i_globex and t >= 1    and t < 11
+isGlobexRev  = i_globex and t >= 11   and t < 91
+isJapanCont  = i_japan  and t >= 121  and t < 131
+isJapanRev   = i_japan  and t >= 131  and t < 211
+isLondonCont = i_london and t >= 541  and t < 551
+isLondonRev  = i_london and t >= 551  and t < 631
+isNYCont     = i_ny     and t >= 930  and t < 940
+isNYRev      = i_ny     and t >= 940  and t < 1020
+isPMCont     = i_pm     and t >= 1081 and t < 1091
+isPMRev      = i_pm     and t >= 1091 and t < 1171
+
+isCont    = isGlobexCont or isJapanCont or isLondonCont or isNYCont or isPMCont
+isRev     = isGlobexRev  or isJapanRev  or isLondonRev  or isNYRev  or isPMRev
+isSession = isCont or isRev
+
+isAnyEnd = (i_globex and t == 91) or (i_japan and t == 211) or (i_london and t == 631) or (i_ny and t == 1020) or (i_pm and t == 1171)
+
+// ─── ATR SL/TP ────────────────────────────────────────────────────────────────
+atr5     = ta.atr(5)
+float sl = atr5 >= 20 ? 50.0 : atr5 < 7 ? 16.5 : 25.0
+float tp = atr5 >= 20 ? 75.0 : atr5 < 7 ? 24.75 : 38.5
+
+// ─── Candle anatomy ───────────────────────────────────────────────────────────
+bodyHigh = math.max(open, close)
+bodyLow  = math.min(open, close)
+bodySize = bodyHigh - bodyLow
+isBull   = close > open
+isBear   = close < open
+wickTop  = high - bodyHigh
+wickBot  = bodyLow - low
+wickOkL  = bodySize > 0 and wickTop <= bodySize * 0.25
+wickOkS  = bodySize > 0 and wickBot <= bodySize * 0.25
+
+// ─── Volume ───────────────────────────────────────────────────────────────────
+volUp   = isBull and volume > volume[1]
+volDown = isBear and volume > volume[1]
+volFade = volume[1] < volume[2] and volume[2] < volume[3]
+
+// ─── Horizontal rays — body de la bougie de référence ────────────────────────
+// Open = tirets, Close = solide — extend.right = infini vers la droite
+if isGlobexRef
+    line.new(bar_index, open,  bar_index + 1, open,  extend=extend.right, color=#888888, width=2, style=line.style_dashed)
+    line.new(bar_index, close, bar_index + 1, close, extend=extend.right, color=#888888, width=2, style=line.style_solid)
+if isJapanRef
+    line.new(bar_index, open,  bar_index + 1, open,  extend=extend.right, color=#FFD700, width=2, style=line.style_dashed)
+    line.new(bar_index, close, bar_index + 1, close, extend=extend.right, color=#FFD700, width=2, style=line.style_solid)
+if isLondonRef
+    line.new(bar_index, open,  bar_index + 1, open,  extend=extend.right, color=#4488FF, width=2, style=line.style_dashed)
+    line.new(bar_index, close, bar_index + 1, close, extend=extend.right, color=#4488FF, width=2, style=line.style_solid)
+if isNYRef
+    line.new(bar_index, open,  bar_index + 1, open,  extend=extend.right, color=#00CC44, width=2, style=line.style_dashed)
+    line.new(bar_index, close, bar_index + 1, close, extend=extend.right, color=#00CC44, width=2, style=line.style_solid)
+if isPMRef
+    line.new(bar_index, open,  bar_index + 1, open,  extend=extend.right, color=#AA44FF, width=2, style=line.style_dashed)
+    line.new(bar_index, close, bar_index + 1, close, extend=extend.right, color=#AA44FF, width=2, style=line.style_solid)
+
+// ─── Session reset ────────────────────────────────────────────────────────────
+if isAnyRef
+    prevZoneHigh    := math.max(refOpen, refClose)
+    prevZoneLow     := math.min(refOpen, refClose)
+    refOpen         := open
+    refClose        := close
+    tradeCount      := 0
+    lastSwingHigh   := na
+    lastSwingLow    := na
+    swingLines      := array.new_line()
+    gapUp           := false
+    gapDown         := false
+    contTradeOpened := false
+    t30              = (close - close[30]) / close[30] * 100
+    biasBull        := t30 > 0.2
+    biasBear        := t30 < -0.2
+
+// ─── Gap detection (NY uniquement) ───────────────────────────────────────────
+if isNYOpen and not na(refClose)
+    gapUp   := open > refClose + atr5 * 0.3
+    gapDown := open < refClose - atr5 * 0.3
+
+// ─── Fair price zone ──────────────────────────────────────────────────────────
+zoneHigh = math.max(refOpen, refClose)
+zoneLow  = math.min(refOpen, refClose)
+
+if isAnyEnd
+    swingLines := array.new_line()
+
+// ─── Swing detection ──────────────────────────────────────────────────────────
+swingH = isSession and high[1] > high[0] and high[1] > high[2]
+swingL = isSession and low[1]  < low[0]  and low[1]  < low[2]
+
+if swingH
+    lastSwingHigh := high[1]
+    array.push(swingLines, line.new(bar_index[1], high[1], bar_index, high[1], color=color.red, style=line.style_dotted))
+
+if swingL
+    lastSwingLow := low[1]
+    array.push(swingLines, line.new(bar_index[1], low[1], bar_index, low[1], color=color.teal, style=line.style_dotted))
+
+if isSession and array.size(swingLines) > 0
+    for i = 0 to array.size(swingLines) - 1
+        line.set_x2(array.get(swingLines, i), bar_index)
+
+// ─── BOS ─────────────────────────────────────────────────────────────────────
+bosL = isBull and not na(lastSwingHigh) and open < lastSwingHigh and close > lastSwingHigh
+bosS = isBear and not na(lastSwingLow)  and open > lastSwingLow  and close < lastSwingLow
+
+if bosL
+    lastSwingHigh := na
+if bosS
+    lastSwingLow  := na
+
+// ─── Prev-session RR filter ───────────────────────────────────────────────────
+nearPrevZone = i_prevFilter and not na(prevZoneHigh) and high > prevZoneLow - sl and low < prevZoneHigh + sl
+
+// ─── Position management ──────────────────────────────────────────────────────
+if strategy.position_size == 0
+    entry_price  := na
+    stop_price   := na
+    tp_price     := na
+    beIsCont     := false
+    beTriggered  := false
+
+if strategy.position_size > 0 and na(entry_price)
+    entry_price := strategy.position_avg_price
+    stop_price  := entry_price - sl
+    tp_price    := entry_price + tp
+
+if strategy.position_size < 0 and na(entry_price)
+    entry_price := strategy.position_avg_price
+    stop_price  := entry_price + sl
+    tp_price    := entry_price - tp
+
+// ─── Breakeven auto à 1:1 RR (continuation uniquement) ───────────────────────
+if beIsCont and not beTriggered and not na(entry_price)
+    if strategy.position_size > 0 and high >= entry_price + sl
+        stop_price  := entry_price
+        beTriggered := true
+        label.new(bar_index, low,  text="BE", style=label.style_label_up,   color=color.orange, textcolor=color.white, size=size.tiny)
+    if strategy.position_size < 0 and low <= entry_price - sl
+        stop_price  := entry_price
+        beTriggered := true
+        label.new(bar_index, high, text="BE", style=label.style_label_down, color=color.orange, textcolor=color.white, size=size.tiny)
+
+strategy.exit("SL/TP L", from_entry="Long",  stop=stop_price, limit=tp_price)
+strategy.exit("SL/TP S", from_entry="Short", stop=stop_price, limit=tp_price)
+
+// ─── PHASE 1 · Continuation ───────────────────────────────────────────────────
+skipContL = i_gapFilter and gapDown
+skipContS = i_gapFilter and gapUp
+
+if isCont and strategy.position_size == 0 and tradeCount < 4 and not nearPrevZone and not contTradeOpened
+    if bosL and wickOkL and volUp and not biasBear and not skipContL
+        strategy.entry("Long", strategy.long)
+        tradeCount      := tradeCount + 1
+        contTradeOpened := true
+        beIsCont        := true
+    if bosS and wickOkS and volDown and not biasBull and not skipContS
+        strategy.entry("Short", strategy.short)
+        tradeCount      := tradeCount + 1
+        contTradeOpened := true
+        beIsCont        := true
+
+// ─── PHASE 2 · Mean Reversion ─────────────────────────────────────────────────
+awayAbove = low  > zoneHigh
+awayBelow = high < zoneLow
+
+if isRev and strategy.position_size == 0 and tradeCount < 4 and not nearPrevZone
+    if awayBelow and bosL and wickOkL and volFade and volUp and not biasBear
+        strategy.entry("Long", strategy.long)
+        tradeCount := tradeCount + 1
+    if awayAbove and bosS and wickOkS and volFade and volDown and not biasBull
+        strategy.entry("Short", strategy.short)
+        tradeCount := tradeCount + 1
+
+// ─── Fonds colorés par session ────────────────────────────────────────────────
+color sessColor = na
+if isGlobexCont or isGlobexRev
+    sessColor := color.new(color.gray, 80)
+if isJapanCont or isJapanRev
+    sessColor := color.new(color.yellow, 80)
+if isLondonCont or isLondonRev
+    sessColor := color.new(color.blue, 80)
+if isNYCont or isNYRev
+    sessColor := color.new(color.green, 75)
+if isPMCont or isPMRev
+    sessColor := color.new(color.purple, 80)
+bgcolor(sessColor, title="Session background")
+
+color openColor = na
+if isGlobexRef
+    openColor := color.new(color.gray, 30)
+if isJapanRef
+    openColor := color.new(color.yellow, 30)
+if isLondonRef
+    openColor := color.new(color.blue, 30)
+if isNYRef
+    openColor := color.new(color.green, 30)
+if isPMRef
+    openColor := color.new(color.purple, 30)
+bgcolor(openColor, title="Session open marker")
+
+plot(close)
