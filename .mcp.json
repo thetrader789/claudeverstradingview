@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tradingview": {
+      "command": "node",
+      "args": ["C:\\Users\\ASUS\\claudeverstradingview\\src\\server.js"]
+    }
+  }
+}
