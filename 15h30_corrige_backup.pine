@@ -140,7 +140,6 @@ var float stop_price  = na
 var float tp_price    = na
 var float saved_sp    = na    // SL effectif sauvegardé à l'entrée
 var float saved_tp    = na    // TP effectif sauvegardé à l'entrée
-var int   sv_lastEntryBar = na  // anti double-entrée même bougie (BUG #4)
 var line  refLineC    = na
 var line  refLineO    = na
 
@@ -290,12 +289,11 @@ if array.size(sv_shL) > 0 and strategy.position_size == 0 and not contBlocked an
             line.set_x2(l, bar_index)
             line.delete(l)
             array.remove(sv_shL, i)
-            if not sv_mSell and canTrade and checkWick and checkTrades and candleBuy and checkVol and bar_index != sv_lastEntryBar
+            if not sv_mSell and canTrade and checkWick and checkTrades and candleBuy and checkVol
                 strategy.entry("Long", strategy.long)
                 saved_sp           := effSP
                 saved_tp           := effTP
                 sv_trades          := sv_trades + 1
-                sv_lastEntryBar    := bar_index
                 sv_beIsContTrade   := isCont
                 if isCont
                     sv_contTradeOpened := true
@@ -308,12 +306,11 @@ if array.size(sv_slL) > 0 and strategy.position_size == 0 and not contBlocked an
             line.set_x2(l, bar_index)
             line.delete(l)
             array.remove(sv_slL, i)
-            if not sv_mBuy and canTrade and checkWick and checkTrades and candleSell and checkVol and bar_index != sv_lastEntryBar
+            if not sv_mBuy and canTrade and checkWick and checkTrades and candleSell and checkVol
                 strategy.entry("Short", strategy.short)
                 saved_sp           := effSP
                 saved_tp           := effTP
                 sv_trades          := sv_trades + 1
-                sv_lastEntryBar    := bar_index
                 sv_beIsContTrade   := isCont
                 if isCont
                     sv_contTradeOpened := true
@@ -338,19 +335,18 @@ if longTime and strategy.position_size == 0 and not contBlocked and not sv_mSell
                 cnt := cnt + 1
             else
                 cnt := 0
-            if cnt == 4 and canTrade and checkWick and checkTrades and candleBuy and checkVol and bar_index != sv_lastEntryBar
+            if cnt == 4 and checkWick and checkTrades and checkVol
                 strategy.entry("Long", strategy.long)
                 saved_sp           := effSP
                 saved_tp           := effTP
                 sv_trades          := sv_trades + 1
-                sv_lastEntryBar    := bar_index
                 sv_beIsContTrade   := isCont
                 if isCont
                     sv_contTradeOpened := true
                 break
 
 if shortTime and strategy.position_size == 0 and not contBlocked and not sv_mBuy and allowShort and globexOk
-    array.push(sv_str, bodyLow)
+    array.push(sv_str, bodyHigh)
     if array.size(sv_str) > 7
         array.shift(sv_str)
     swL = low[1] < low[0] and low[1] < low[2]
@@ -366,12 +362,11 @@ if shortTime and strategy.position_size == 0 and not contBlocked and not sv_mBuy
                 cnt := cnt + 1
             else
                 cnt := 0
-            if cnt == 4 and canTrade and checkWick and checkTrades and candleSell and checkVol and bar_index != sv_lastEntryBar
+            if cnt == 4 and checkWick and checkTrades and checkVol
                 strategy.entry("Short", strategy.short)
                 saved_sp           := effSP
                 saved_tp           := effTP
                 sv_trades          := sv_trades + 1
-                sv_lastEntryBar    := bar_index
                 sv_beIsContTrade   := isCont
                 if isCont
                     sv_contTradeOpened := true
