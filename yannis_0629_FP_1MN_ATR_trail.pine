@@ -561,7 +561,6 @@ manageLevel(boxes, lines, seriesId) =>
                  and not muchSell
                  and atrFilter
                  and tradeTypeLocal == ""
-                 and refCandleBull
                     strategy.entry("Long", strategy.long, qty = 10)
 
                     if swingTimeUSA
@@ -582,7 +581,6 @@ manageLevel(boxes, lines, seriesId) =>
                  and not muchBuy
                  and atrFilter
                  and tradeTypeLocal == ""
-                 and refCandleBear
                     strategy.entry("Short", strategy.short, qty = 10)
 
                     if swingTimeUSA
