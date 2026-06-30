@@ -173,11 +173,11 @@ inRange(startMin, offsetStart, offsetEnd) =>
 
 startUSA     = toMinutes(15, 29)
 startMidnight = toMinutes(0, 0)
-startJapan   = toMinutes(1, 59)
-startLondon  = toMinutes(8, 59)
+startJapan   = toMinutes(2, 0)
+startLondon  = toMinutes(9, 0)
 
-startNews1430 = isNews1430Today ? toMinutes(14, 29) : na
-startNews2000 = isNews2000Today ? toMinutes(19, 59) : na
+startNews1430 = isNews1430Today ? toMinutes(14, 30) : na
+startNews2000 = isNews2000Today ? toMinutes(20, 0) : na
 
 // ======================
 // CONDITIONS AUTO
