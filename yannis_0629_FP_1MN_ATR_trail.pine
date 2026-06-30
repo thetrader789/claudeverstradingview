@@ -48,6 +48,10 @@ news1430_30 = input.bool(false, "30", group="14h30", inline="n3")
 var line myLineClose = na
 var line myLineOpen = na
 
+// var float lastMidnight = na
+// var float lastJapan = na
+// var float lastLondon = na
+// var float lastUSA = na
 var float currentPeriod = na
 var float lastPeriod = na
 
@@ -255,9 +259,9 @@ if conditionStart
     muchSell := trend30m < -0.2
     muchBuy := trend30m > 0.2
 
-    // ─── BUG #1 CORRIGÉ : tradeTimeX est FALSE à la minute de conditionStart
-    // pour Japan (01h59) et London (08h59). On utilise inRange(startX, 0, 0)
-    // qui est TRUE exactement à la minute de référence.
+    // ─── BUG #1 CORRIGÉ : tradeTimeJapan/London sont FALSE à la minute exacte
+    // de conditionStart (offset +1). inRange(startUSA,0,0) est TRUE exactement
+    // à la minute de référence → lastPeriod se met à jour correctement.
     if inRange(startUSA, 0, 0)
         lastPeriod := na
     else
@@ -265,9 +269,9 @@ if conditionStart
 
     currentPeriod := openValue
 
-
-// Direction de la bougie de référence — filtre identique à Fair_Price_Multi_Session
-// et 15h30_corrige : longs uniquement si ref haussière, shorts si ref baissière.
+// ─── BUG #3 CORRIGÉ : filtre direction bougie de référence ───────────────────
+// Sans ce filtre, une entrée longue pouvait se prendre à 2h30 Japan
+// même si la bougie de référence (01h59) était baissière.
 refCandleBull = closeValue > openValue
 refCandleBear = closeValue < openValue
 
@@ -281,6 +285,7 @@ shortTime = tradeTime and low > closeValue
 
 bodySize = math.abs(bodyHigh - bodyLow)
 
+// var float rejectWickSize = na
 var float pushWickSize = na
 var float highWickSize = na
 var float lowWickSize = na
@@ -297,14 +302,15 @@ tooMuchWick = pushWickSize > bodySize * 0.4
 
 tooCloseOfMean = bodyHigh >= zoneLow - buffer and bodyLow <= zoneHigh + buffer
 
-canTrade = not tooCloseOfMean
+canTrade = not tooCloseOfMean// and not tooMuchWick
 
-volCond = volume > avg
+volCond = volume > avg //volume > volume[1] and volume > volume[2]
 
 lastStart = ta.barssince(conditionStart)
 
 
-atrFilter = ta.atr(14)> ta.atr(14)[20]
+// 3. Volatilité - éviter les marchés calmes/ranging
+atrFilter = ta.atr(14)> ta.atr(14)[20]  // ATR en expansion
 
 
 length = 5
@@ -361,13 +367,11 @@ lookback         = false
 
 inRange          = true
 
-// ─── Fix #4 : réinitialisation propre à chaque bougie ───────────────────────
 pivHi1 = ta.pivothigh(high, swingSizeL1, swingSizeR1)
 pivLo1 = ta.pivotlow (low,  swingSizeL1, swingSizeR1)
 pivHi2 = ta.pivothigh(high, swingSizeL2, swingSizeR2)
 pivLo2 = ta.pivotlow (low,  swingSizeL2, swingSizeR2)
 
-// Fix #4 : flags toujours recalculés, jamais bloqués sur true
 bool h1 = not na(pivHi1)
 bool l1 = not na(pivLo1)
 bool h2 = not na(pivHi2)
@@ -390,7 +394,6 @@ if l2
 color CLEAR = color.rgb(0, 0, 0, 100)
 boxWid1     = 0.001 * boxWid
 
-// ─── Fix #3 : boxStyle paramétré (level + isHigh) ───────────────────────────
 boxStyleVal(level, isHigh) =>
     switch boxStyle
         'TYPE 1' => level
@@ -416,7 +419,6 @@ switchhalign(texthalign) =>
         'Right'  => text.align_right
         'Left'   => text.align_left
 
-// ─── Fix #5 : tableaux séparés pour chaque série ────────────────────────────
 var levelBoxes1 = array.new_box()
 var levelLines1 = array.new_line()
 
@@ -517,7 +519,6 @@ manageLevel(boxes, lines, seriesId) =>
                 array.remove(lines, j)
                 array.remove(boxes, j)
 
-
                 if seriesId == 2
                     swingType = array.get(swingTypes, j)
                     array.remove(swingTypes, j)
@@ -526,6 +527,7 @@ manageLevel(boxes, lines, seriesId) =>
                      and not tradeTimeMidnight
                      and not tradeTimeUSA
 
+                        // ─── BUG #3 : filtre direction bougie de référence ───
                         if candleBuy and swingType == "high" and not (highWickSize > bodySize * 0.4) and refCandleBull
                             strategy.entry("Long", strategy.long, qty = 10)
                             if swingTimeUSA
@@ -545,12 +547,11 @@ manageLevel(boxes, lines, seriesId) =>
                                 tradeTypeLocal := "crossContinue"
                             label.new(bar_index, high, text=str.tostring(tradeTypeLocal))
 
-                // ─── BUG #2 CORRIGÉ : tradeTypeLocal == "" garantit que l'entrée
-                // "simple" ne peut pas écraser un type "continue"/"crossContinue"
-                // déjà posé ci-dessus. Sans ce garde, strategy.position_size reste
-                // 0 sur la même bougie (Pine ne l'actualise pas intra-barre) et les
-                // deux blocs strategy.entry s'exécutaient, le second écrasant
-                // tradeTypeLocal → mauvais SL/TP et continuePeriod jamais mis à false.
+                label.new(bar_index, high, text=str.tostring(muchSell))
+
+                // ─── BUG #2 + BUG #3 : tradeTypeLocal == "" empêche l'entrée
+                // simple d'écraser un type "continue" déjà posé ; refCandleBull
+                // bloque les longs si la bougie de référence est baissière.
                 if longTime
                  and candleBuy
                  and canTrade
@@ -715,7 +716,6 @@ if tradeType == "crossSimple"
         minAtrDown := minAtrDown < x2 ? x2 : minAtrDown
 
     tp_price := lastPeriod
-
 
     if strategy.position_size > 0
         stop_price := minAtrDown
