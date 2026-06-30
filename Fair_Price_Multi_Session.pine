@@ -7,8 +7,84 @@ i_japan      = input.bool(true, "Japan   02:00 CET")
 i_london     = input.bool(true, "London  09:00 CET")
 i_ny         = input.bool(true, "NY      15:30 CET")
 i_pm         = input.bool(true, "PM      18:00 CET")
-i_gapFilter  = input.bool(true, "Gap filter NY (skip cont. against gap)")
+i_fomc       = input.bool(true, "FOMC   20:00 CET")
+i_fomcDirect = input.bool(true, "FOMC entrée directe (sans BOS si référence forte)")
+i_gapFilter  = input.bool(true, "Gap filter NY + Globex (skip cont. against gap)")
 i_prevFilter = input.bool(true, "Prev-session RR filter")
+i_volFadeMin = input.float(1.0, "Volume min continuation (× barre préc.)", minval=0.0, maxval=1.0, step=0.05,
+     tooltip="Continuation : volume d'entrée ≥ ce ratio × volume de la barre précédente. 1.0 = exige une hausse stricte (défaut, meilleur backtest) ; <1.0 tolère un fade de volume (entrées plus précoces mais backtest dégradé — testé 0.6 : +3 255 $/PF 1,40 vs +6 440 $/PF 2,31 en strict).")
+i_revMinRR   = input.float(0.0, "RR min reversion (distance fair price / SL)", minval=0.0, step=0.1,
+     tooltip="Reversion (Phase 2) : n'autorise l'entrée que si la distance entrée → fair price (bord proche de la zone) ≥ ce ratio × SL. Évite de fader vers un fair price trop proche (RR réel insuffisant). 0 = filtre désactivé (défaut, meilleur backtest). Testé 1.5 : +3 260 $/PF 1,92/11 trades vs 0 : +6 440 $/PF 2,31/18 trades — le filtre retire 7 reversions dont 4 gagnantes.")
+i_revWickMax = input.float(0.25, "Mèche max reversion (× corps)", minval=0.25, maxval=1.0, step=0.05,
+     tooltip="Reversion (Phase 2) : tolérance de mèche de rejet sur la bougie de cassure. 0.25 = clôture collée au bas (défaut, strict, meilleur backtest). Plus haut = tolère un rejet (la bougie referme loin de son extrême). La cassure baissière London 18/06 10:19 a une mèche = 79 % du corps → il faut ~0.80 pour la capter, MAIS voir i_revPrioVol : combiné, c'est net catastrophique.")
+i_revPrioVol = input.bool(false, "Reversion : priorité volume (pop) au lieu de fade strict",
+     tooltip="Reversion (Phase 2). Décoché (défaut) : exige volFade (volume décroissant sur 3 barres) ET pop d'entrée. Coché : exige seulement le POP de volume sur la bougie de cassure (volume > barre préc.). TESTÉ coché + mèche 0.80 (pour capter London 18/06 10:19) = −7 680 $/63 trades/PF 0,76/DD 14 895 vs défaut +5 420 $/20/1,91/2 605 — CATASTROPHIQUE (la reversion fade alors chaque cassure mécheuse à volume, massivement perdante). Défaut conservé.")
+
+// ─── Calendrier FOMC 20h00 (jour du mois) ─────────────────────────────────────
+// Cocher le jour du FOMC du mois en cours.
+// 2026 : Jan 28 · Mar 18 · Mai 6 · Jun 17 · Jul 29 · Sep 16 · Oct 28 · Déc 9
+i_fomc01 = input.bool(false, "1",  group="📅 FOMC 20h00 (jour du mois)", inline="fm1")
+i_fomc02 = input.bool(false, "2",  group="📅 FOMC 20h00 (jour du mois)", inline="fm1")
+i_fomc03 = input.bool(false, "3",  group="📅 FOMC 20h00 (jour du mois)", inline="fm1")
+i_fomc04 = input.bool(false, "4",  group="📅 FOMC 20h00 (jour du mois)", inline="fm1")
+i_fomc05 = input.bool(false, "5",  group="📅 FOMC 20h00 (jour du mois)", inline="fm1")
+i_fomc06 = input.bool(false, "6",  group="📅 FOMC 20h00 (jour du mois)", inline="fm1")
+i_fomc07 = input.bool(false, "7",  group="📅 FOMC 20h00 (jour du mois)", inline="fm1")
+i_fomc08 = input.bool(false, "8",  group="📅 FOMC 20h00 (jour du mois)", inline="fm1")
+i_fomc09 = input.bool(false, "9",  group="📅 FOMC 20h00 (jour du mois)", inline="fm1")
+i_fomc10 = input.bool(false, "10", group="📅 FOMC 20h00 (jour du mois)", inline="fm1")
+i_fomc11 = input.bool(false, "11", group="📅 FOMC 20h00 (jour du mois)", inline="fm2")
+i_fomc12 = input.bool(false, "12", group="📅 FOMC 20h00 (jour du mois)", inline="fm2")
+i_fomc13 = input.bool(false, "13", group="📅 FOMC 20h00 (jour du mois)", inline="fm2")
+i_fomc14 = input.bool(false, "14", group="📅 FOMC 20h00 (jour du mois)", inline="fm2")
+i_fomc15 = input.bool(false, "15", group="📅 FOMC 20h00 (jour du mois)", inline="fm2")
+i_fomc16 = input.bool(false, "16", group="📅 FOMC 20h00 (jour du mois)", inline="fm2")
+i_fomc17 = input.bool(true,  "17", group="📅 FOMC 20h00 (jour du mois)", inline="fm2")
+i_fomc18 = input.bool(false, "18", group="📅 FOMC 20h00 (jour du mois)", inline="fm2")
+i_fomc19 = input.bool(false, "19", group="📅 FOMC 20h00 (jour du mois)", inline="fm2")
+i_fomc20 = input.bool(false, "20", group="📅 FOMC 20h00 (jour du mois)", inline="fm2")
+i_fomc21 = input.bool(false, "21", group="📅 FOMC 20h00 (jour du mois)", inline="fm3")
+i_fomc22 = input.bool(false, "22", group="📅 FOMC 20h00 (jour du mois)", inline="fm3")
+i_fomc23 = input.bool(false, "23", group="📅 FOMC 20h00 (jour du mois)", inline="fm3")
+i_fomc24 = input.bool(false, "24", group="📅 FOMC 20h00 (jour du mois)", inline="fm3")
+i_fomc25 = input.bool(false, "25", group="📅 FOMC 20h00 (jour du mois)", inline="fm3")
+i_fomc26 = input.bool(false, "26", group="📅 FOMC 20h00 (jour du mois)", inline="fm3")
+i_fomc27 = input.bool(false, "27", group="📅 FOMC 20h00 (jour du mois)", inline="fm3")
+i_fomc28 = input.bool(false, "28", group="📅 FOMC 20h00 (jour du mois)", inline="fm3")
+i_fomc29 = input.bool(false, "29", group="📅 FOMC 20h00 (jour du mois)", inline="fm3")
+i_fomc30 = input.bool(false, "30", group="📅 FOMC 20h00 (jour du mois)", inline="fm3")
+
+// ─── Calendrier News 14h30 (jour du mois) ──────────────────────────────────────
+i_news01 = input.bool(false, "1",  group="📅 News 14h30 (jour du mois)", inline="n1")
+i_news02 = input.bool(false, "2",  group="📅 News 14h30 (jour du mois)", inline="n1")
+i_news03 = input.bool(false, "3",  group="📅 News 14h30 (jour du mois)", inline="n1")
+i_news04 = input.bool(false, "4",  group="📅 News 14h30 (jour du mois)", inline="n1")
+i_news05 = input.bool(false, "5",  group="📅 News 14h30 (jour du mois)", inline="n1")
+i_news06 = input.bool(false, "6",  group="📅 News 14h30 (jour du mois)", inline="n1")
+i_news07 = input.bool(false, "7",  group="📅 News 14h30 (jour du mois)", inline="n1")
+i_news08 = input.bool(false, "8",  group="📅 News 14h30 (jour du mois)", inline="n1")
+i_news09 = input.bool(false, "9",  group="📅 News 14h30 (jour du mois)", inline="n1")
+i_news10 = input.bool(false, "10", group="📅 News 14h30 (jour du mois)", inline="n1")
+i_news11 = input.bool(false, "11", group="📅 News 14h30 (jour du mois)", inline="n2")
+i_news12 = input.bool(false, "12", group="📅 News 14h30 (jour du mois)", inline="n2")
+i_news13 = input.bool(false, "13", group="📅 News 14h30 (jour du mois)", inline="n2")
+i_news14 = input.bool(false, "14", group="📅 News 14h30 (jour du mois)", inline="n2")
+i_news15 = input.bool(false, "15", group="📅 News 14h30 (jour du mois)", inline="n2")
+i_news16 = input.bool(false, "16", group="📅 News 14h30 (jour du mois)", inline="n2")
+i_news17 = input.bool(false, "17", group="📅 News 14h30 (jour du mois)", inline="n2")
+i_news18 = input.bool(false, "18", group="📅 News 14h30 (jour du mois)", inline="n2")
+i_news19 = input.bool(false, "19", group="📅 News 14h30 (jour du mois)", inline="n2")
+i_news20 = input.bool(false, "20", group="📅 News 14h30 (jour du mois)", inline="n2")
+i_news21 = input.bool(false, "21", group="📅 News 14h30 (jour du mois)", inline="n3")
+i_news22 = input.bool(false, "22", group="📅 News 14h30 (jour du mois)", inline="n3")
+i_news23 = input.bool(false, "23", group="📅 News 14h30 (jour du mois)", inline="n3")
+i_news24 = input.bool(false, "24", group="📅 News 14h30 (jour du mois)", inline="n3")
+i_news25 = input.bool(false, "25", group="📅 News 14h30 (jour du mois)", inline="n3")
+i_news26 = input.bool(false, "26", group="📅 News 14h30 (jour du mois)", inline="n3")
+i_news27 = input.bool(false, "27", group="📅 News 14h30 (jour du mois)", inline="n3")
+i_news28 = input.bool(false, "28", group="📅 News 14h30 (jour du mois)", inline="n3")
+i_news29 = input.bool(false, "29", group="📅 News 14h30 (jour du mois)", inline="n3")
+i_news30 = input.bool(false, "30", group="📅 News 14h30 (jour du mois)", inline="n3")
 
 // ─── Persistent state ─────────────────────────────────────────────────────────
 var float refOpen   = na
@@ -24,6 +100,8 @@ var float lastSwingLow  = na
 var line[] swingLines   = array.new_line()
 var bool biasBull = false
 var bool biasBear = false
+var bool refBull  = false
+var bool refBear  = false
 var bool gapUp    = false
 var bool gapDown  = false
 
@@ -32,40 +110,81 @@ var bool beIsCont        = false
 var bool beTriggered     = false
 var bool contTradeOpened = false
 
+// FOMC entrée directe (sans BOS)
+var bool fomcDirLong  = false
+var bool fomcDirShort = false
+
 // ─── Time ─────────────────────────────────────────────────────────────────────
 h = hour(time, "Europe/Paris")
 m = minute(time, "Europe/Paris")
 t = h * 60 + m
 
+// ─── Calendrier ───────────────────────────────────────────────────────────────
+fomcDays  = array.from(i_fomc01, i_fomc02, i_fomc03, i_fomc04, i_fomc05, i_fomc06, i_fomc07, i_fomc08, i_fomc09, i_fomc10,
+                        i_fomc11, i_fomc12, i_fomc13, i_fomc14, i_fomc15, i_fomc16, i_fomc17, i_fomc18, i_fomc19, i_fomc20,
+                        i_fomc21, i_fomc22, i_fomc23, i_fomc24, i_fomc25, i_fomc26, i_fomc27, i_fomc28, i_fomc29, i_fomc30)
+newsDays  = array.from(i_news01, i_news02, i_news03, i_news04, i_news05, i_news06, i_news07, i_news08, i_news09, i_news10,
+                        i_news11, i_news12, i_news13, i_news14, i_news15, i_news16, i_news17, i_news18, i_news19, i_news20,
+                        i_news21, i_news22, i_news23, i_news24, i_news25, i_news26, i_news27, i_news28, i_news29, i_news30)
+dom       = dayofmonth(time, "Europe/Paris")
+isFomcDay = dom <= 30 and array.get(fomcDays, dom - 1)
+isNewsDay = dom <= 30 and array.get(newsDays, dom - 1)
+
+nyRefT  = isNewsDay ? 869 : 929
+nyOpenT = nyRefT + 1
+
 // ─── Reference candles ────────────────────────────────────────────────────────
 isGlobexRef = i_globex and t == 0
 isJapanRef  = i_japan  and t == 120
 isLondonRef = i_london and t == 540
-isNYRef     = i_ny     and h == 15 and m == 29
+isNYRef     = i_ny     and t == nyRefT
 isPMRef     = i_pm     and t == 1080
-isAnyRef    = isGlobexRef or isJapanRef or isLondonRef or isNYRef or isPMRef
+isFomcRef   = i_fomc   and isFomcDay and t == 1200
+isAnyRef    = isGlobexRef or isJapanRef or isLondonRef or isNYRef or isPMRef or isFomcRef
 
-isNYOpen = i_ny and t == 930
+isNYOpen = i_ny and t == nyOpenT
 
 // ─── Session windows ──────────────────────────────────────────────────────────
-isGlobexCont = i_globex and t >= 1    and t < 11
-isGlobexRev  = i_globex and t >= 11   and t < 91
-isJapanCont  = i_japan  and t >= 121  and t < 131
-isJapanRev   = i_japan  and t >= 131  and t < 211
-isLondonCont = i_london and t >= 541  and t < 551
-isLondonRev  = i_london and t >= 551  and t < 631
-isNYCont     = i_ny     and t >= 930  and t < 940
-isNYRev      = i_ny     and t >= 940  and t < 1020
-isPMCont     = i_pm     and t >= 1081 and t < 1091
-isPMRev      = i_pm     and t >= 1091 and t < 1171
+isGlobexCont = i_globex and t >= 1    and t < 16
+isGlobexRev  = i_globex and t >= 16   and t < 91
+isJapanCont  = i_japan  and t >= 121  and t < 136
+isJapanRev   = i_japan  and t >= 136  and t < 211
+isLondonCont = i_london and t >= 541  and t < 556
+isLondonRev  = i_london and t >= 556  and t < 631
+isNYCont     = i_ny     and t >= nyOpenT       and t < nyOpenT + 15
+isNYRev      = i_ny     and t >= nyOpenT + 15  and t < nyOpenT + 90
+isPMCont     = i_pm     and t >= 1081 and t < 1096
+isPMRev      = i_pm     and t >= 1096 and t < 1171
+isFomcCont   = i_fomc   and isFomcDay and t >= 1201 and t < 1216
+isFomcRev    = i_fomc   and isFomcDay and t >= 1216 and t < 1291
 
-isCont    = isGlobexCont or isJapanCont or isLondonCont or isNYCont or isPMCont
-isRev     = isGlobexRev  or isJapanRev  or isLondonRev  or isNYRev  or isPMRev
+isCont    = isGlobexCont or isJapanCont or isLondonCont or isNYCont or isPMCont or isFomcCont
+isRev     = isGlobexRev  or isJapanRev  or isLondonRev  or isNYRev  or isPMRev  or isFomcRev
 isSession = isCont or isRev
 
-isAnyEnd = (i_globex and t == 91) or (i_japan and t == 211) or (i_london and t == 631) or (i_ny and t == 1020) or (i_pm and t == 1171)
+isAnyEnd = (i_globex and t == 91) or (i_japan and t == 211) or (i_london and t == 631) or (i_ny and t == nyOpenT + 90) or (i_pm and t == 1171) or (i_fomc and isFomcDay and t == 1291)
 
-// ─── ATR SL/TP ────────────────────────────────────────────────────────────────
+// ─── Pré-session ──────────────────────────────────────────────────────────────
+isGlobexPre = i_globex and t >= 1425
+isJapanPre  = i_japan  and t >= 105  and t < 120
+isLondonPre = i_london and t >= 525  and t < 540
+isNYPre     = i_ny     and t >= nyRefT - 15 and t < nyRefT
+isPMPre     = i_pm     and t >= 1065 and t < 1080
+isFomcPre   = i_fomc   and isFomcDay and t >= 1185 and t < 1200
+isAnyPre    = isGlobexPre or isJapanPre or isLondonPre or isNYPre or isPMPre or isFomcPre
+
+isGlobexPreStart = i_globex and t == 1425
+isJapanPreStart  = i_japan  and t == 105
+isLondonPreStart = i_london and t == 525
+isNYPreStart     = i_ny     and t == nyRefT - 15
+isPMPreStart     = i_pm     and t == 1065
+isFomcPreStart   = i_fomc   and isFomcDay and t == 1185
+isAnyPreStart    = isGlobexPreStart or isJapanPreStart or isLondonPreStart or isNYPreStart or isPMPreStart or isFomcPreStart
+
+isSwingWindow = isSession or isAnyPre
+
+// ─── SL/TP ATR adaptatif ─────────────────────────────────────────────────────
+// ATR ≥ 20 → SL 50 pts / TP 75 pts | 7 ≤ ATR < 20 → SL 25 / TP 38.5 | ATR < 7 → SL 16.5 / TP 24.75
 atr5     = ta.atr(5)
 float sl = atr5 >= 20 ? 50.0 : atr5 < 7 ? 16.5 : 25.0
 float tp = atr5 >= 20 ? 75.0 : atr5 < 7 ? 24.75 : 38.5
@@ -84,10 +203,11 @@ wickOkS  = bodySize > 0 and wickBot <= bodySize * 0.25
 // ─── Volume ───────────────────────────────────────────────────────────────────
 volUp   = isBull and volume > volume[1]
 volDown = isBear and volume > volume[1]
-volFade = volume[1] < volume[2] and volume[2] < volume[3]
+volFade     = volume[1] < volume[2] and volume[2] < volume[3]
+volUpCont   = isBull and volume > volume[1] * i_volFadeMin
+volDownCont = isBear and volume > volume[1] * i_volFadeMin
 
-// ─── Horizontal rays — body de la bougie de référence ────────────────────────
-// Open = tirets, Close = solide — extend.right = infini vers la droite
+// ─── Horizontal rays ──────────────────────────────────────────────────────────
 if isGlobexRef
     line.new(bar_index, open,  bar_index + 1, open,  extend=extend.right, color=#888888, width=2, style=line.style_dashed)
     line.new(bar_index, close, bar_index + 1, close, extend=extend.right, color=#888888, width=2, style=line.style_solid)
@@ -103,6 +223,9 @@ if isNYRef
 if isPMRef
     line.new(bar_index, open,  bar_index + 1, open,  extend=extend.right, color=#AA44FF, width=2, style=line.style_dashed)
     line.new(bar_index, close, bar_index + 1, close, extend=extend.right, color=#AA44FF, width=2, style=line.style_solid)
+if isFomcRef
+    line.new(bar_index, open,  bar_index + 1, open,  extend=extend.right, color=#FF6600, width=2, style=line.style_dashed)
+    line.new(bar_index, close, bar_index + 1, close, extend=extend.right, color=#FF6600, width=2, style=line.style_solid)
 
 // ─── Session reset ────────────────────────────────────────────────────────────
 if isAnyRef
@@ -111,20 +234,34 @@ if isAnyRef
     refOpen         := open
     refClose        := close
     tradeCount      := 0
-    lastSwingHigh   := na
-    lastSwingLow    := na
-    swingLines      := array.new_line()
     gapUp           := false
     gapDown         := false
     contTradeOpened := false
     t30              = (close - close[30]) / close[30] * 100
     biasBull        := t30 > 0.2
     biasBear        := t30 < -0.2
+    refBull         := close > open
+    refBear         := close < open
+    fomcDirLong     := false
+    fomcDirShort    := false
+    if isFomcRef
+        fomcDirLong  := i_fomcDirect and isBull and bodySize >= sl
+        fomcDirShort := i_fomcDirect and isBear and bodySize >= sl
 
-// ─── Gap detection (NY uniquement) ───────────────────────────────────────────
+// ─── Pré-session reset ────────────────────────────────────────────────────────
+if isAnyPreStart
+    lastSwingHigh := na
+    lastSwingLow  := na
+    swingLines    := array.new_line()
+
+// ─── Gap detection ────────────────────────────────────────────────────────────
 if isNYOpen and not na(refClose)
     gapUp   := open > refClose + atr5 * 0.3
     gapDown := open < refClose - atr5 * 0.3
+
+if isGlobexRef and not na(close[1])
+    gapUp   := open > close[1] + atr5 * 0.3
+    gapDown := open < close[1] - atr5 * 0.3
 
 // ─── Fair price zone ──────────────────────────────────────────────────────────
 zoneHigh = math.max(refOpen, refClose)
@@ -134,8 +271,8 @@ if isAnyEnd
     swingLines := array.new_line()
 
 // ─── Swing detection ──────────────────────────────────────────────────────────
-swingH = isSession and high[1] > high[0] and high[1] > high[2]
-swingL = isSession and low[1]  < low[0]  and low[1]  < low[2]
+swingH = isSwingWindow and high[1] > high[0] and high[1] > high[2]
+swingL = isSwingWindow and low[1]  < low[0]  and low[1]  < low[2]
 
 if swingH
     lastSwingHigh := high[1]
@@ -145,7 +282,7 @@ if swingL
     lastSwingLow := low[1]
     array.push(swingLines, line.new(bar_index[1], low[1], bar_index, low[1], color=color.teal, style=line.style_dotted))
 
-if isSession and array.size(swingLines) > 0
+if isSwingWindow and array.size(swingLines) > 0
     for i = 0 to array.size(swingLines) - 1
         line.set_x2(array.get(swingLines, i), bar_index)
 
@@ -194,16 +331,31 @@ strategy.exit("SL/TP L", from_entry="Long",  stop=stop_price, limit=tp_price)
 strategy.exit("SL/TP S", from_entry="Short", stop=stop_price, limit=tp_price)
 
 // ─── PHASE 1 · Continuation ───────────────────────────────────────────────────
-skipContL = i_gapFilter and gapDown
-skipContS = i_gapFilter and gapUp
+skipContL = i_gapFilter and ((isNYCont and gapDown) or (isGlobexCont and gapUp))
+skipContS = i_gapFilter and ((isNYCont and gapUp)   or (isGlobexCont and gapDown))
 
 if isCont and strategy.position_size == 0 and tradeCount < 4 and not nearPrevZone and not contTradeOpened
-    if bosL and wickOkL and volUp and not biasBear and not skipContL
+    if bosL and wickOkL and volUpCont and not biasBear and not refBear and not skipContL
         strategy.entry("Long", strategy.long)
         tradeCount      := tradeCount + 1
         contTradeOpened := true
         beIsCont        := true
-    if bosS and wickOkS and volDown and not biasBull and not skipContS
+    if bosS and wickOkS and volDownCont and not biasBull and not refBull and not skipContS
+        strategy.entry("Short", strategy.short)
+        tradeCount      := tradeCount + 1
+        contTradeOpened := true
+        beIsCont        := true
+
+// ─── FOMC · Entrée directe à 20:01 (signal sur la bougie de référence 20:00) ───
+// La bougie 20:00 EST le BOS → pas de filtre nearPrevZone (la réf a déjà cassé la zone).
+// Fill à l'open de 20:01 (comportement standard Pine).
+if isFomcRef and strategy.position_size == 0 and tradeCount < 4
+    if fomcDirLong and not biasBear
+        strategy.entry("Long", strategy.long)
+        tradeCount      := tradeCount + 1
+        contTradeOpened := true
+        beIsCont        := true
+    if fomcDirShort and not biasBull
         strategy.entry("Short", strategy.short)
         tradeCount      := tradeCount + 1
         contTradeOpened := true
@@ -212,12 +364,19 @@ if isCont and strategy.position_size == 0 and tradeCount < 4 and not nearPrevZon
 // ─── PHASE 2 · Mean Reversion ─────────────────────────────────────────────────
 awayAbove = low  > zoneHigh
 awayBelow = high < zoneLow
+revRoomOkL = close < zoneLow  and (zoneLow  - close) >= i_revMinRR * sl
+revRoomOkS = close > zoneHigh and (close - zoneHigh) >= i_revMinRR * sl
+
+wickOkL_rev = bodySize > 0 and wickTop <= bodySize * i_revWickMax
+wickOkS_rev = bodySize > 0 and wickBot <= bodySize * i_revWickMax
+revVolL = i_revPrioVol ? volUp   : (volFade and volUp)
+revVolS = i_revPrioVol ? volDown : (volFade and volDown)
 
 if isRev and strategy.position_size == 0 and tradeCount < 4 and not nearPrevZone
-    if awayBelow and bosL and wickOkL and volFade and volUp and not biasBear
+    if awayBelow and bosL and wickOkL_rev and revVolL and not biasBear and not refBear and revRoomOkL
         strategy.entry("Long", strategy.long)
         tradeCount := tradeCount + 1
-    if awayAbove and bosS and wickOkS and volFade and volDown and not biasBull
+    if awayAbove and bosS and wickOkS_rev and revVolS and not biasBull and not refBull and revRoomOkS
         strategy.entry("Short", strategy.short)
         tradeCount := tradeCount + 1
 
@@ -233,6 +392,8 @@ if isNYCont or isNYRev
     sessColor := color.new(color.green, 75)
 if isPMCont or isPMRev
     sessColor := color.new(color.purple, 80)
+if isFomcCont or isFomcRev
+    sessColor := color.new(color.orange, 75)
 bgcolor(sessColor, title="Session background")
 
 color openColor = na
@@ -246,6 +407,8 @@ if isNYRef
     openColor := color.new(color.green, 30)
 if isPMRef
     openColor := color.new(color.purple, 30)
+if isFomcRef
+    openColor := color.new(color.orange, 30)
 bgcolor(openColor, title="Session open marker")
 
 plot(close)

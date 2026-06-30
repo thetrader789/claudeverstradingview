@@ -1,0 +1,765 @@
+//@version=6
+strategy("15h30", pyramiding = 0, overlay = true, margin_long = 5, margin_short = 5, max_lines_count = 500, max_labels_count = 500, slippage=2)
+
+
+
+
+newsDays = input.string(
+     "",
+     "News 20h00 (ex: 1,5,12,30)",
+     group="20h00"
+)
+
+// ─── Calendrier News 14h30 (jour du mois) ──────────────────────────────────────
+news1430_01 = input.bool(false, "1",  group="14h30", inline="n1")
+news1430_02 = input.bool(false, "2",  group="14h30", inline="n1")
+news1430_03 = input.bool(false, "3",  group="14h30", inline="n1")
+news1430_04 = input.bool(false, "4",  group="14h30", inline="n1")
+news1430_05 = input.bool(false, "5",  group="14h30", inline="n1")
+news1430_06 = input.bool(false, "6",  group="14h30", inline="n1")
+news1430_07 = input.bool(false, "7",  group="14h30", inline="n1")
+news1430_08 = input.bool(false, "8",  group="14h30", inline="n1")
+news1430_09 = input.bool(false, "9",  group="14h30", inline="n1")
+news1430_10 = input.bool(false, "10", group="14h30", inline="n1")
+news1430_11 = input.bool(false, "11", group="14h30", inline="n2")
+news1430_12 = input.bool(false, "12", group="14h30", inline="n2")
+news1430_13 = input.bool(false, "13", group="14h30", inline="n2")
+news1430_14 = input.bool(false, "14", group="14h30", inline="n2")
+news1430_15 = input.bool(false, "15", group="14h30", inline="n2")
+news1430_16 = input.bool(false, "16", group="14h30", inline="n2")
+news1430_17 = input.bool(false, "17", group="14h30", inline="n2")
+news1430_18 = input.bool(false, "18", group="14h30", inline="n2")
+news1430_19 = input.bool(false, "19", group="14h30", inline="n2")
+news1430_20 = input.bool(false, "20", group="14h30", inline="n2")
+news1430_21 = input.bool(false, "21", group="14h30", inline="n3")
+news1430_22 = input.bool(false, "22", group="14h30", inline="n3")
+news1430_23 = input.bool(false, "23", group="14h30", inline="n3")
+news1430_24 = input.bool(false, "24", group="14h30", inline="n3")
+news1430_25 = input.bool(false, "25", group="14h30", inline="n3")
+news1430_26 = input.bool(false, "26", group="14h30", inline="n3")
+news1430_27 = input.bool(false, "27", group="14h30", inline="n3")
+news1430_28 = input.bool(false, "28", group="14h30", inline="n3")
+news1430_29 = input.bool(false, "29", group="14h30", inline="n3")
+news1430_30 = input.bool(false, "30", group="14h30", inline="n3")
+
+
+
+
+var line myLineClose = na
+var line myLineOpen = na
+
+var float currentPeriod = na
+var float lastPeriod = na
+
+var float openValue = na
+var float closeValue = na
+
+var float entry_price = na
+var float stop_price = na
+var float tp_price = na
+
+var float minAtrUp = na
+var float minAtrDown = na
+
+var bool muchSell = false
+var bool muchBuy = false
+
+var bool continuePeriod = true
+
+var string tradeType = ""
+
+var int maxCount = 100
+
+max_bars_in_trade = 20
+
+vol = volume[0]
+avg = ta.sma(vol, 5)
+
+var float[] structures = array.new_float()
+
+hourCET   = hour(time, "Europe/Paris")
+minuteCET = minute(time, "Europe/Paris")
+dayCET = dayofmonth(time, "Europe/Paris")
+
+float tp = na
+float sp = na
+
+tick = syminfo.mintick
+atr5 = ta.atr(5)
+
+if atr5 >= 20
+    sp := 50
+    tp := 75
+else if atr5 < 7
+    sp := 16.5
+    tp := 24.75
+else
+    sp := 25
+    tp := 38.5
+
+bodyHigh = math.max(open, close)
+bodyLow = math.min(open, close)
+
+candleBuy = close > open
+candleSell = open > close
+
+
+
+
+isNews2000Today = str.contains("," + newsDays + ",", "," + str.tostring(dayCET) + ",")
+
+
+
+isNews1430Today =
+     (dayCET == 1 and news1430_01) or
+     (dayCET == 2 and news1430_02) or
+     (dayCET == 3 and news1430_03) or
+     (dayCET == 4 and news1430_04) or
+     (dayCET == 5 and news1430_05) or
+     (dayCET == 6 and news1430_06) or
+     (dayCET == 7 and news1430_07) or
+     (dayCET == 8 and news1430_08) or
+     (dayCET == 9 and news1430_09) or
+     (dayCET == 10 and news1430_10) or
+     (dayCET == 11 and news1430_11) or
+     (dayCET == 12 and news1430_12) or
+     (dayCET == 13 and news1430_13) or
+     (dayCET == 14 and news1430_14) or
+     (dayCET == 15 and news1430_15) or
+     (dayCET == 16 and news1430_16) or
+     (dayCET == 17 and news1430_17) or
+     (dayCET == 18 and news1430_18) or
+     (dayCET == 19 and news1430_19) or
+     (dayCET == 20 and news1430_20) or
+     (dayCET == 21 and news1430_21) or
+     (dayCET == 22 and news1430_22) or
+     (dayCET == 23 and news1430_23) or
+     (dayCET == 24 and news1430_24) or
+     (dayCET == 25 and news1430_25) or
+     (dayCET == 26 and news1430_26) or
+     (dayCET == 27 and news1430_27) or
+     (dayCET == 28 and news1430_28) or
+     (dayCET == 29 and news1430_29) or
+     (dayCET == 30 and news1430_30)
+
+
+
+// Fonction pour convertir HH:MM en minutes depuis minuit
+toMinutes(h, m) =>
+    h * 60 + m
+
+// Fonction pour vérifier si on est dans une plage
+inRange(startMin, offsetStart, offsetEnd) =>
+    current = hourCET * 60 + minuteCET
+    sessionStart = startMin + offsetStart
+    sessionEnd = startMin + offsetEnd
+
+    // gestion passage minuit
+    if sessionEnd >= 1440
+        current >= sessionStart or current <= sessionEnd - 1440
+    else if sessionStart < 0
+        current <= sessionEnd or current >= sessionStart + 1440
+    else
+        current >= sessionStart and current <= sessionEnd
+
+
+// ======================
+// SEULEMENT LES STARTS
+// ======================
+
+startUSA     = toMinutes(15, 29)
+startMidnight = toMinutes(0, 0)
+startJapan   = toMinutes(1, 59)
+startLondon  = toMinutes(8, 59)
+
+startNews1430 = isNews1430Today ? toMinutes(14, 29) : na
+startNews2000 = isNews2000Today ? toMinutes(19, 59) : na
+
+// ======================
+// CONDITIONS AUTO
+// ======================
+
+conditionStart =
+     inRange(startUSA, 0, 0) or
+     inRange(startMidnight, 0, 0) or
+     inRange(startJapan, 0, 0) or
+     inRange(startLondon, 0, 0) or
+     (not na(startNews1430) and inRange(startNews1430, 0, 0)) or
+     (not na(startNews2000) and inRange(startNews2000, 0, 0))
+
+
+
+tradeTimeUSA = inRange(startUSA, 1, 90)
+tradeTimeMidnight = inRange(startMidnight, 0, 89)
+tradeTimeJapan = inRange(startJapan, 1, 90)
+tradeTimeLondon = inRange(startLondon, 1, 90)
+tradeTimeNews1430 = (not na(startNews1430) and inRange(startNews1430, 1, 60))
+tradeTimeNews2000 = (not na(startNews2000) and inRange(startNews2000, 1, 90))
+
+tradeTime =
+     tradeTimeUSA
+     or
+     tradeTimeMidnight
+     or
+     tradeTimeJapan
+     or
+     tradeTimeLondon
+     or
+     tradeTimeNews1430
+     or
+     tradeTimeNews2000
+
+swingTimeUSA = inRange(startUSA, -59, 90)
+swingTimeMidnight = inRange(startMidnight, -60, 89)
+swingTimeJapan = inRange(startJapan, -59, 90)
+swingTimeLondon = inRange(startLondon, -59, 90)
+swingTimeNews1430 = (not na(startNews1430) and inRange(startNews1430, -59, 60))
+swingTimeNews2000 = (not na(startNews2000) and inRange(startNews2000, -59, 90))
+
+swingTime =
+     swingTimeUSA
+     or
+     swingTimeMidnight
+     or
+     swingTimeJapan
+     or
+     swingTimeLondon
+     or
+     swingTimeNews1430
+     or
+     swingTimeNews2000
+
+
+
+if strategy.position_size == 0
+    entry_price := na
+    stop_price := na
+    tp_price := na
+    minAtrUp:= na
+    minAtrDown := na
+
+
+if conditionStart
+    openValue := open
+    closeValue := close
+
+    structures := array.new_float()
+
+    trend30m = (close - close[30]) / close[30] * 100
+
+    muchSell := false
+    muchBuy := false
+
+    continuePeriod := true
+
+    muchSell := trend30m < -0.2
+    muchBuy := trend30m > 0.2
+
+    // ─── BUG #1 CORRIGÉ : tradeTimeX est FALSE à la minute de conditionStart
+    // pour Japan (01h59) et London (08h59). On utilise inRange(startX, 0, 0)
+    // qui est TRUE exactement à la minute de référence.
+    if inRange(startUSA, 0, 0)
+        lastPeriod := na
+    else
+        lastPeriod := currentPeriod
+
+    currentPeriod := openValue
+
+
+// Direction de la bougie de référence — filtre identique à Fair_Price_Multi_Session
+// et 15h30_corrige : longs uniquement si ref haussière, shorts si ref baissière.
+refCandleBull = closeValue > openValue
+refCandleBear = closeValue < openValue
+
+zoneHigh = math.max(openValue, closeValue)
+zoneLow = math.min(openValue, closeValue)
+
+buffer = 20
+
+longTime = tradeTime and high < closeValue
+shortTime = tradeTime and low > closeValue
+
+bodySize = math.abs(bodyHigh - bodyLow)
+
+var float pushWickSize = na
+var float highWickSize = na
+var float lowWickSize = na
+
+highWickSize := high - bodyHigh
+lowWickSize := bodyLow - low
+
+if longTime
+    pushWickSize := highWickSize
+if shortTime
+    pushWickSize := lowWickSize
+
+tooMuchWick = pushWickSize > bodySize * 0.4
+
+tooCloseOfMean = bodyHigh >= zoneLow - buffer and bodyLow <= zoneHigh + buffer
+
+canTrade = not tooCloseOfMean
+
+volCond = volume > avg
+
+lastStart = ta.barssince(conditionStart)
+
+
+atrFilter = ta.atr(14)> ta.atr(14)[20]
+
+
+length = 5
+m = input(1.5, "Multiplier")
+src1 = input(high)
+src2 = input(low)
+pline = input(true, "Show Price Lines")
+col1 = input(color.blue, "ATR Text Color")
+col2 = input(color.teal, "Low Text Color",inline ="1")
+col3 = input(color.red, "High Text Color",inline ="2")
+
+collong = input(color.teal, "Low Line Color",inline ="1")
+colshort = input(color.red, "High Line Color",inline ="2")
+
+a = ta.rma(ta.tr(true), length) * m
+x = ta.rma(ta.tr(true), length) * m + src1
+x2 = src2 - ta.rma(ta.tr(true), length) * m
+
+p1 = plot(x, title = "ATR Short Stop Loss", color= colshort, trackprice = pline ? true : false)
+p2 = plot(x2, title = "ATR Long Stop Loss", color= collong, trackprice = pline ? true : false)
+
+
+// Inputs
+swingSizeR1       = input.int(3, 'Rejection Swing ', inline='brl')
+swingSizeL1       = input.int(3, '-', inline='brl')
+swingSizeR2       = input.int(6, 'Continuation Swing ', inline='brl')
+swingSizeL2       = input.int(6, '-', inline='brl')
+showBoxes        = false
+showSwingLines   = true
+showBubbles      = true
+showVol          = false
+extendtilfilled  = true
+
+// Conditions
+hidefilled       = input.bool(false, 'Hide Filled', group='Conditions')
+voltresh = input.int(0, 'Volume >', group='Conditions')
+
+// Appearance inputs
+showhighs        = true
+showlows         = true
+sellcol          = #aa2430
+buycol           = #66bb6a
+sellcolB         = #aa2430
+buycolB          = #66bb6a
+sellboxCol       = #80192231
+buyboxCol        = #66bb6a31
+lineStyle        = 'Dotted'
+lineWid          = 1
+boxWid           = 0.7
+boxStyle         = 'TYPE 1'
+labelsize        = 'Size: Tiny'
+texthalign       = 'Right'
+lookback         = false
+
+inRange          = true
+
+// ─── Fix #4 : réinitialisation propre à chaque bougie ───────────────────────
+pivHi1 = ta.pivothigh(high, swingSizeL1, swingSizeR1)
+pivLo1 = ta.pivotlow (low,  swingSizeL1, swingSizeR1)
+pivHi2 = ta.pivothigh(high, swingSizeL2, swingSizeR2)
+pivLo2 = ta.pivotlow (low,  swingSizeL2, swingSizeR2)
+
+// Fix #4 : flags toujours recalculés, jamais bloqués sur true
+bool h1 = not na(pivHi1)
+bool l1 = not na(pivLo1)
+bool h2 = not na(pivHi2)
+bool l2 = not na(pivLo2)
+
+var int prevHighIndex1 = na
+var int prevLowIndex1  = na
+var int prevHighIndex2 = na
+var int prevLowIndex2  = na
+
+if h1
+    prevHighIndex1 := bar_index - swingSizeR1
+if l1
+    prevLowIndex1  := bar_index - swingSizeR1
+if h2
+    prevHighIndex2 := bar_index - swingSizeR2
+if l2
+    prevLowIndex2  := bar_index - swingSizeR2
+
+color CLEAR = color.rgb(0, 0, 0, 100)
+boxWid1     = 0.001 * boxWid
+
+// ─── Fix #3 : boxStyle paramétré (level + isHigh) ───────────────────────────
+boxStyleVal(level, isHigh) =>
+    switch boxStyle
+        'TYPE 1' => level
+        'TYPE 2' => isHigh ? level * (1 - boxWid1) : level * (1 + boxWid1)
+
+lineStyle(x) =>
+    switch x
+        'Solid'  => line.style_solid
+        'Dashed' => line.style_dashed
+        'Dotted' => line.style_dotted
+
+switchtextsize(textsize) =>
+    switch textsize
+        'Size: Normal' => size.normal
+        'Size: Small'  => size.small
+        'Size: Tiny'   => size.tiny
+        'Size: Auto'   => size.auto
+        'Size: Large'  => size.large
+
+switchhalign(texthalign) =>
+    switch texthalign
+        'Middle' => text.align_center
+        'Right'  => text.align_right
+        'Left'   => text.align_left
+
+// ─── Fix #5 : tableaux séparés pour chaque série ────────────────────────────
+var levelBoxes1 = array.new_box()
+var levelLines1 = array.new_line()
+
+var levelBoxes2 = array.new_box()
+var levelLines2 = array.new_line()
+
+var swingTypes = array.new_string()
+
+if h1 and inRange and showhighs and longTime
+    hBox  = box.new(
+         prevHighIndex1,
+         pivHi1 * (1 + boxWid1),
+         bar_index,
+         boxStyleVal(pivHi1, true),
+         border_color = na,
+         bgcolor      = showBoxes ? sellboxCol : CLEAR,
+         text_halign  = switchhalign(texthalign),
+         text_valign  = text.align_center,
+         text_color   = chart.fg_color,
+         text_size    = switchtextsize(labelsize))
+    hLine = line.new(prevHighIndex1, pivHi1, bar_index, pivHi1,
+         color = showSwingLines ? sellcol : CLEAR,
+         style = lineStyle(lineStyle),
+         width = lineWid)
+    array.push(levelBoxes1, hBox)
+    array.push(levelLines1, hLine)
+
+if l1 and inRange and showlows and shortTime
+    lBox  = box.new(
+         prevLowIndex1,
+         pivLo1 * (1 - boxWid1),
+         bar_index,
+         boxStyleVal(pivLo1, false),
+         border_color = na,
+         bgcolor      = showBoxes ? buyboxCol : CLEAR,
+         text_halign  = switchhalign(texthalign),
+         text_valign  = text.align_center,
+         text_color   = chart.fg_color,
+         text_size    = switchtextsize(labelsize))
+    lLine = line.new(prevLowIndex1, pivLo1, bar_index, pivLo1,
+         color = showSwingLines ? buycol : CLEAR,
+         style = lineStyle(lineStyle),
+         width = lineWid)
+    array.push(levelBoxes1, lBox)
+    array.push(levelLines1, lLine)
+
+if h2 and inRange and showhighs
+    hBox2  = box.new(
+         prevHighIndex2,
+         pivHi2 * (1 + boxWid1),
+         bar_index,
+         boxStyleVal(pivHi2, true),
+         border_color = na,
+         bgcolor      = showBoxes ? sellboxCol : CLEAR,
+         text_halign  = switchhalign(texthalign),
+         text_valign  = text.align_center,
+         text_color   = chart.fg_color,
+         text_size    = switchtextsize(labelsize))
+    hLine2 = line.new(prevHighIndex2, pivHi2, bar_index, pivHi2,
+         color = color.orange,
+         width = 2)
+    array.push(levelBoxes2, hBox2)
+    array.push(levelLines2, hLine2)
+    array.push(swingTypes, "high")
+
+if l2 and inRange and showlows
+    lBox2  = box.new(
+         prevLowIndex2,
+         pivLo2 * (1 - boxWid1),
+         bar_index,
+         boxStyleVal(pivLo2, false),
+         border_color = na,
+         bgcolor      = showBoxes ? buyboxCol : CLEAR,
+         text_halign  = switchhalign(texthalign),
+         text_valign  = text.align_center,
+         text_color   = chart.fg_color,
+         text_size    = switchtextsize(labelsize))
+    lLine2 = line.new(prevLowIndex2, pivLo2, bar_index, pivLo2,
+         color = color.blue,
+         width = 2)
+    array.push(levelBoxes2, lBox2)
+    array.push(levelLines2, lLine2)
+    array.push(swingTypes, "low")
+
+manageLevel(boxes, lines, seriesId) =>
+    tradeTypeLocal = ""
+    sz = array.size(boxes)
+    if sz > 0
+        for i = 0 to sz - 1
+            j = sz - 1 - i
+            b     = array.get(boxes, j)
+            ln    = array.get(lines, j)
+            level = line.get_y2(ln)
+
+            filled = (bodyHigh >= level and bodyLow <= level)
+
+            if filled and extendtilfilled and not hidefilled
+                array.remove(lines, j)
+                array.remove(boxes, j)
+
+
+                if seriesId == 2
+                    swingType = array.get(swingTypes, j)
+                    array.remove(swingTypes, j)
+
+                    if tradeTime and not conditionStart and lastStart <= 10 and strategy.position_size == 0 and continuePeriod
+                     and not tradeTimeMidnight
+                     and not tradeTimeUSA
+
+                        if candleBuy and swingType == "high" and not (highWickSize > bodySize * 0.4) and refCandleBull
+                            strategy.entry("Long", strategy.long, qty = 10)
+                            if swingTimeUSA
+                                tradeTypeLocal := "continue"
+                            else if lastPeriod < close
+                                tradeTypeLocal := "continue"
+                            else
+                                tradeTypeLocal := "crossContinue"
+                            label.new(bar_index, high, text=str.tostring(tradeTypeLocal))
+                        if candleSell and swingType == "low" and not (lowWickSize > bodySize * 0.4) and refCandleBear
+                            strategy.entry("Short", strategy.short, qty = 10)
+                            if swingTimeUSA
+                                tradeTypeLocal := "continue"
+                            else if lastPeriod > close
+                                tradeTypeLocal := "continue"
+                            else
+                                tradeTypeLocal := "crossContinue"
+                            label.new(bar_index, high, text=str.tostring(tradeTypeLocal))
+
+                // ─── BUG #2 CORRIGÉ : tradeTypeLocal == "" garantit que l'entrée
+                // "simple" ne peut pas écraser un type "continue"/"crossContinue"
+                // déjà posé ci-dessus. Sans ce garde, strategy.position_size reste
+                // 0 sur la même bougie (Pine ne l'actualise pas intra-barre) et les
+                // deux blocs strategy.entry s'exécutaient, le second écrasant
+                // tradeTypeLocal → mauvais SL/TP et continuePeriod jamais mis à false.
+                if longTime
+                 and candleBuy
+                 and canTrade
+                 and volCond
+                 and not tooMuchWick
+                 and strategy.position_size == 0
+                 and not muchSell
+                 and atrFilter
+                 and tradeTypeLocal == ""
+                 and refCandleBull
+                    strategy.entry("Long", strategy.long, qty = 10)
+
+                    if swingTimeUSA
+                        tradeTypeLocal := "simple"
+                    else if lastPeriod < close
+                        tradeTypeLocal := "simple"
+                    else
+                        tradeTypeLocal := "crossSimple"
+
+                    label.new(bar_index, high, text=str.tostring(tradeTypeLocal))
+
+                if shortTime
+                 and candleSell
+                 and canTrade
+                 and volCond
+                 and not tooMuchWick
+                 and strategy.position_size == 0
+                 and not muchBuy
+                 and atrFilter
+                 and tradeTypeLocal == ""
+                 and refCandleBear
+                    strategy.entry("Short", strategy.short, qty = 10)
+
+                    if swingTimeUSA
+                        tradeTypeLocal := "simple"
+                    else if lastPeriod > close
+                        tradeTypeLocal := "simple"
+                    else
+                        tradeTypeLocal := "crossSimple"
+
+                    label.new(bar_index, high, text=str.tostring(tradeTypeLocal))
+
+                continue
+
+            box.set_right(b, bar_index + 1)
+            line.set_x2(ln, bar_index + 1)
+
+            if not swingTime
+                array.remove(lines, j)
+                array.remove(boxes, j)
+                if seriesId == 2
+                    array.remove(swingTypes, j)
+                line.delete(ln)
+                box.delete(b)
+
+    tradeTypeLocal
+
+// ─── Application sur les deux séries ─────────────────────────────────────────
+returnValue1 = manageLevel(levelBoxes1, levelLines1, 1)
+returnValue2 = manageLevel(levelBoxes2, levelLines2, 2)
+
+if returnValue2 != ""
+    tradeType := returnValue2
+
+else if returnValue1 != ""
+    tradeType := returnValue1
+
+// ─── Nettoyage si tableaux trop grands ───────────────────────────────────────
+trimArray(boxes, lines) =>
+    while array.size(boxes) >= 500
+        b  = array.get(boxes, 0)
+        ln = array.get(lines, 0)
+        box.delete(b)
+        line.delete(ln)
+        array.remove(boxes, 0)
+        array.remove(lines, 0)
+
+trimArray(levelBoxes1, levelLines1)
+trimArray(levelBoxes2, levelLines2)
+
+// ─── Bulles ───────────────────────────────────────────────────────────────────
+plotshape(tradeTime and showhighs and showBubbles and h1 ? high[swingSizeR1] : na,
+     style    = shape.circle,
+     location = location.absolute,
+     offset   = -swingSizeR1,
+     color    = sellcolB,
+     size     = size.tiny)
+
+plotshape(tradeTime and showlows and showBubbles and l1 ? low[swingSizeR1] : na,
+     style    = shape.circle,
+     location = location.absolute,
+     offset   = -swingSizeR1,
+     color    = buycolB,
+     size     = size.tiny)
+
+plotshape(h2 ? high[swingSizeR2] : na,
+     location = location.absolute,
+     offset   = -swingSizeR2,
+     style    = shape.circle,
+     color    = color.orange)
+
+plotshape(l2 ? low[swingSizeR2] : na,
+     location = location.absolute,
+     offset   = -swingSizeR2,
+     style    = shape.circle,
+     color    = color.blue)
+
+
+if tradeType == "simple"
+    if strategy.position_size > 0 and na(entry_price)
+        entry_price := strategy.position_avg_price
+        stop_price := entry_price - sp
+        tp_price := entry_price + tp
+
+    if strategy.position_size < 0 and na(entry_price)
+        entry_price := strategy.position_avg_price
+        stop_price := entry_price + sp
+        tp_price := entry_price - tp
+
+if tradeType == "continue"
+    if strategy.position_size > 0 and na(entry_price)
+        entry_price := strategy.position_avg_price
+        stop_price := entry_price - sp
+        tp_price := entry_price + tp
+        continuePeriod := false
+
+    if strategy.position_size < 0 and na(entry_price)
+        entry_price := strategy.position_avg_price
+        stop_price := entry_price + sp
+        tp_price := entry_price - tp
+        continuePeriod := false
+
+if tradeType == "crossContinue"
+    if strategy.position_size != 0 and na(minAtrUp) and na(minAtrDown) and continuePeriod
+        minAtrUp := x
+        minAtrDown := x2
+        continuePeriod := false
+
+    if not na(x) and not na(minAtrUp)
+        minAtrUp := minAtrUp > x ? x : minAtrUp
+    if not na(x2) and not na(minAtrDown)
+        minAtrDown := minAtrDown < x2 ? x2 : minAtrDown
+
+    tp_price := lastPeriod
+
+    if strategy.position_size > 0
+        stop_price := minAtrDown
+
+    if strategy.position_size < 0
+        stop_price := minAtrUp
+
+
+if tradeType == "crossSimple"
+    if strategy.position_size != 0 and na(minAtrUp) and na(minAtrDown)
+        minAtrUp := x
+        minAtrDown := x2
+
+    if not na(x) and not na(minAtrUp)
+        minAtrUp := minAtrUp > x ? x : minAtrUp
+
+    if not na(x2) and not na(minAtrDown)
+        minAtrDown := minAtrDown < x2 ? x2 : minAtrDown
+
+    tp_price := lastPeriod
+
+
+    if strategy.position_size > 0
+        stop_price := minAtrDown
+
+    if strategy.position_size < 0
+        stop_price := minAtrUp
+
+
+strategy.exit("SL/TP LONG", from_entry="Long", stop=stop_price, limit=tp_price)
+
+strategy.exit("SL/TP Short", from_entry="Short", stop=stop_price, limit=tp_price)
+
+highFP = math.max(openValue, closeValue)
+lowFP = math.min(openValue, closeValue)
+closeInFP = close > lowFP and close < highFP
+openOutFP = not (open > lowFP and open < highFP)
+fairPriceCond = closeInFP and openOutFP
+
+if fairPriceCond
+    strategy.close_all("Fair price reached")
+
+if conditionStart
+    myLineClose := line.new(
+         x1 = bar_index,
+         y1 = close,
+         x2 = bar_index,
+         y2 = close,
+         color = color.green,
+         width = 2
+     )
+
+    myLineOpen := line.new(
+         x1 = bar_index,
+         y1 = open,
+         x2 = bar_index,
+         y2 = open,
+         color = color.green,
+         width = 2
+     )
+
+
+
+if not na(myLineClose) and tradeTime
+    line.set_x2(myLineClose, bar_index)
+
+if not na(myLineOpen) and tradeTime
+    line.set_x2(myLineOpen, bar_index)

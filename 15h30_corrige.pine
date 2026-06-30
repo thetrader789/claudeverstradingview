@@ -263,9 +263,12 @@ checkVol    = vol > avgVol or volDecr
 bool allowLong  = true
 bool allowShort = true
 
+bool refCandleBull = sv_refC > sv_refO
+bool refCandleBear = sv_refC < sv_refO
+
 if (sv_sess == 2 or sv_sess == 3) and not na(sv_prevC) and not na(sv_refC)
-    allowLong  := sv_refC >= sv_prevC
-    allowShort := sv_refC <= sv_prevC
+    allowLong  := sv_refC >= sv_prevC and refCandleBull
+    allowShort := sv_refC <= sv_prevC and refCandleBear
 
 // ─────────────────────────────────────────────────────────
 // GLOBEX : trade uniquement si gap détecté
