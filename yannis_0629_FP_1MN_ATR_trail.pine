@@ -427,7 +427,7 @@ var levelLines2 = array.new_line()
 
 var swingTypes = array.new_string()
 
-if h1 and inRange and showhighs and longTime
+if h1 and inRange and showhighs and longTime and pivHi1 >= zoneLow - sp
     hBox  = box.new(
          prevHighIndex1,
          pivHi1 * (1 + boxWid1),
@@ -446,7 +446,7 @@ if h1 and inRange and showhighs and longTime
     array.push(levelBoxes1, hBox)
     array.push(levelLines1, hLine)
 
-if l1 and inRange and showlows and shortTime
+if l1 and inRange and showlows and shortTime and pivLo1 <= zoneHigh + sp
     lBox  = box.new(
          prevLowIndex1,
          pivLo1 * (1 - boxWid1),
@@ -523,7 +523,7 @@ manageLevel(boxes, lines, seriesId) =>
                     swingType = array.get(swingTypes, j)
                     array.remove(swingTypes, j)
 
-                    if tradeTime and not conditionStart and lastStart <= 10 and strategy.position_size == 0 and continuePeriod
+                    if tradeTime and not conditionStart and lastStart <= 15 and strategy.position_size == 0 and continuePeriod
                      and not tradeTimeMidnight
                      and not tradeTimeUSA
 
@@ -552,15 +552,20 @@ manageLevel(boxes, lines, seriesId) =>
                 // ─── BUG #2 + BUG #3 : tradeTypeLocal == "" empêche l'entrée
                 // simple d'écraser un type "continue" déjà posé ; refCandleBull
                 // bloque les longs si la bougie de référence est baissière.
-                if longTime
+                // Reversal Long : niveau entre sp et sp/2 sous zoneLow → distance min sp/2 pour R:R valide
+                // Reversal Short : niveau entre zoneHigh+sp/2 et zoneHigh+sp → distance min sp/2 pour R:R valide
+                if tradeTime
                  and candleBuy
-                 and canTrade
                  and volCond
                  and not tooMuchWick
                  and strategy.position_size == 0
                  and not muchSell
                  and atrFilter
                  and tradeTypeLocal == ""
+                 and level >= zoneLow - sp
+                 and level <= zoneLow - sp / 2
+                 and lastStart > 15
+                 and refCandleBull
                     strategy.entry("Long", strategy.long, qty = 10)
 
                     if swingTimeUSA
@@ -572,15 +577,18 @@ manageLevel(boxes, lines, seriesId) =>
 
                     label.new(bar_index, high, text=str.tostring(tradeTypeLocal))
 
-                if shortTime
+                if tradeTime
                  and candleSell
-                 and canTrade
                  and volCond
                  and not tooMuchWick
                  and strategy.position_size == 0
                  and not muchBuy
                  and atrFilter
                  and tradeTypeLocal == ""
+                 and level >= zoneHigh + sp / 2
+                 and level <= zoneHigh + sp
+                 and lastStart > 15
+                 and refCandleBear
                     strategy.entry("Short", strategy.short, qty = 10)
 
                     if swingTimeUSA
@@ -676,11 +684,27 @@ if tradeType == "continue"
         tp_price := entry_price + tp
         continuePeriod := false
 
+    // Trailing ATR dès 1:1 atteint (Long) — breakeven minimum
+    if strategy.position_size > 0 and not na(entry_price) and high >= entry_price + sp
+        if na(minAtrDown)
+            minAtrDown := x2
+        if not na(x2)
+            minAtrDown := minAtrDown < x2 ? x2 : minAtrDown
+        stop_price := math.max(entry_price, minAtrDown)
+
     if strategy.position_size < 0 and na(entry_price)
         entry_price := strategy.position_avg_price
         stop_price := entry_price + sp
         tp_price := entry_price - tp
         continuePeriod := false
+
+    // Trailing ATR dès 1:1 atteint (Short) — breakeven minimum
+    if strategy.position_size < 0 and not na(entry_price) and low <= entry_price - sp
+        if na(minAtrUp)
+            minAtrUp := x
+        if not na(x)
+            minAtrUp := minAtrUp > x ? x : minAtrUp
+        stop_price := math.min(entry_price, minAtrUp)
 
 if tradeType == "crossContinue"
     if strategy.position_size != 0 and na(minAtrUp) and na(minAtrDown) and continuePeriod
