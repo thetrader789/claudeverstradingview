@@ -1,0 +1,329 @@
+//@version=6
+strategy("Opening Range Break Strategy (ORB) — Anti Fake-Breakout", shorttitle="ORB Anti-Fake", overlay=true,
+     default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=0,
+     process_orders_on_close=true, calc_on_every_tick=false, slippage=3, max_boxes_count=500)
+
+// ============================================================================
+// Adapté de la présentation "Opening Range Break Strategy" (slides 1-7).
+// Règle clé du slide 5 (invalidation) : on évite un breakout qui se produit
+// trop près du H/L de la session précédente ET qui n'a pas d'autre liquidité
+// (swing high/low) au-delà pour justifier une vraie continuation — sinon
+// c'est typiquement un fake breakout basse probabilité.
+// ============================================================================
+
+// ============================================================================
+// INPUTS — Session / Opening Range
+// ============================================================================
+grpSession = "Session & Opening Range"
+sessionChoice = input.string("New York (15:30-15:45 CET)", "Session",
+     options=["New York (15:30-15:45 CET)", "Londres (09:00-09:30 CET)", "Asie (02:00-02:30 CET)", "Personnalisée"],
+     group=grpSession)
+customSession = input.session("1530-1545", "Session personnalisée (si 'Personnalisée')", group=grpSession)
+sessionTZ = input.string("Europe/Paris", "Fuseau horaire de la session (CET/CEST)", group=grpSession,
+     tooltip="Fuseau IANA (pas un offset fixe) : bascule automatiquement CET (hiver, GMT+1) / CEST (été, GMT+2). Un offset fixe type 'GMT+1' se décale d'1h dès qu'on change d'heure. Ce script doit être appliqué sur un graphique en 5 minutes (règle 'clôture 5m hors range').")
+
+// ============================================================================
+// INPUTS — Filtre anti fake-breakout (slide 5)
+// ============================================================================
+grpInvalid = "Filtre anti fake-breakout (slide 5)"
+usePrevSessionFilter = input.bool(true, "Vérifier proximité H/L session précédente", group=grpInvalid)
+useSwingFilter = input.bool(true, "Exiger de la liquidité (swing) au-delà du niveau", group=grpInvalid)
+atrLen = input.int(14, "Période ATR (mesure de proximité)", group=grpInvalid)
+proximityMult = input.float(0.5, "Distance min. requise (x ATR)", group=grpInvalid,
+     tooltip="Si le high/low de l'OR est à moins de X x ATR du H/L de la session précédente ET qu'aucun swing significatif ne se trouve au-delà à plus de X x ATR, le trade est invalidé (fake breakout probable).")
+pivotLen = input.int(8, "Longueur pivot (barres de chaque côté)", group=grpInvalid)
+pivotLookback = input.int(300, "Barres de recherche des pivots", group=grpInvalid)
+
+// ============================================================================
+// INPUTS — Gestion du trade
+// ============================================================================
+grpTrade = "Gestion du trade"
+minRR = input.float(1.0, "R:R minimum pour entrée marché (sinon retest ORB)", group=grpTrade,
+     tooltip="Si la bougie de breakout est trop grosse pour offrir ce R:R au marché, on arme un ordre limite au retest du niveau cassé à la place.")
+maxLossesDay = input.int(2, "Pertes max par jour", group=grpTrade)
+stopAfterWin = input.bool(true, "Stop trading après 1 gain dans la journée", group=grpTrade)
+maxSessionHours = input.float(3.0, "Durée max de recherche de breakout après clôture OR (heures)", group=grpTrade,
+     tooltip="Passé ce délai après la fin de l'opening range, on arrête de chercher un breakout sur ce range (et on annule tout ordre de retest encore en attente) jusqu'à la prochaine session.")
+
+grpFlatten = "Sécurité"
+useEodFlatten = input.bool(true, "Flatten de sécurité en fin de journée", group=grpFlatten)
+flattenHour = input.int(23, "Heure de flatten (fuseau du graphique)", minval=0, maxval=23, group=grpFlatten)
+flattenMinute = input.int(0, "Minute de flatten", minval=0, maxval=59, group=grpFlatten)
+
+// ============================================================================
+// 1) SESSION & OPENING RANGE
+// ============================================================================
+sessionString = sessionChoice == "New York (15:30-15:45 CET)" ? "1530-1545" :
+     sessionChoice == "Londres (09:00-09:30 CET)" ? "0900-0930" :
+     sessionChoice == "Asie (02:00-02:30 CET)" ? "0200-0230" : customSession
+
+inSession = not na(time(timeframe.period, sessionString, sessionTZ))
+
+var float orHigh = na
+var float orLow  = na
+var int   orBarCount = 0
+var box   orBox = na
+var bool  breakoutDoneToday = false
+
+if inSession
+    // "na(orHigh)" couvre le cas limite où la toute première barre chargée à
+    // l'écran tombe déjà dans une session (inSession[1] vaut alors na, pas false).
+    if not inSession[1] or na(orHigh)
+        orHigh := high
+        orLow := low
+        orBarCount := 1
+        // Réinitialisé ici (au DÉBUT de chaque nouvelle session), pas seulement au
+        // changement de jour calendaire — sinon un range déjà "consommé" pouvait
+        // redevenir éligible après minuit si la fenêtre de recherche (maxSessionHours)
+        // chevauchait le changement de jour (même bug que celui déjà corrigé, mais
+        // côté "attempt flag" plutôt que côté "fenêtre temporelle").
+        breakoutDoneToday := false
+        // Nouvelle boîte visuelle, mise à jour en direct à chaque barre de la
+        // session (mèche haute/basse incluse) — on voit l'OR se former en temps réel.
+        orBox := box.new(bar_index, high, bar_index, low, border_color=color.new(color.blue, 40),
+             bgcolor=color.new(color.blue, 90))
+    else
+        orHigh := math.max(orHigh, high)
+        orLow := math.min(orLow, low)
+        orBarCount += 1
+        box.set_top(orBox, orHigh)
+        box.set_bottom(orBox, orLow)
+        box.set_right(orBox, bar_index)
+
+sessionJustEnded = not inSession and inSession[1]
+
+// ta.stdev doit être appelé à chaque barre (hors bloc conditionnel) pour que
+// son état interne reste cohérent ; on ne retient sa valeur qu'à la clôture de l'OR.
+stdevNow = ta.stdev(close, orBarCount > 0 ? orBarCount : 1)
+
+var float orMid = na
+var float orStdev = na
+var bool  orLocked = false
+var int   sessionEndTime = na
+
+if sessionJustEnded
+    orMid := (orHigh + orLow) / 2
+    orStdev := stdevNow
+    orLocked := true
+    sessionEndTime := time
+
+// Fenêtre de validité du breakout : au-delà de maxSessionHours après la clôture
+// de l'OR, on arrête de chercher un trade sur ce range (il devient trop "vieux").
+withinTradingWindow = not na(sessionEndTime) and (time - sessionEndTime) <= maxSessionHours * 60 * 60 * 1000
+
+// ============================================================================
+// 2) H/L DE LA SESSION PRÉCÉDENTE (proxy : veille, journalier)
+// ============================================================================
+prevDayHigh = request.security(syminfo.tickerid, "1D", high[1], lookahead=barmerge.lookahead_off)
+prevDayLow  = request.security(syminfo.tickerid, "1D", low[1],  lookahead=barmerge.lookahead_off)
+
+// ============================================================================
+// 3) SWINGS (PIVOTS) — recherche du swing le plus proche au-delà d'un niveau
+// ============================================================================
+pivotHighVal = ta.pivothigh(high, pivotLen, pivotLen)
+pivotLowVal  = ta.pivotlow(low, pivotLen, pivotLen)
+
+var array<float> pivotHighs     = array.new_float()
+var array<int>   pivotHighBars  = array.new_int()
+var array<float> pivotLows      = array.new_float()
+var array<int>   pivotLowBars   = array.new_int()
+
+if not na(pivotHighVal)
+    array.push(pivotHighs, pivotHighVal)
+    array.push(pivotHighBars, bar_index - pivotLen)
+if not na(pivotLowVal)
+    array.push(pivotLows, pivotLowVal)
+    array.push(pivotLowBars, bar_index - pivotLen)
+
+while array.size(pivotHighBars) > 0 and bar_index - array.get(pivotHighBars, 0) > pivotLookback
+    array.shift(pivotHighs)
+    array.shift(pivotHighBars)
+while array.size(pivotLowBars) > 0 and bar_index - array.get(pivotLowBars, 0) > pivotLookback
+    array.shift(pivotLows)
+    array.shift(pivotLowBars)
+
+nearestSwingAbove(level) =>
+    float nearest = na
+    if array.size(pivotHighs) > 0
+        for i = 0 to array.size(pivotHighs) - 1
+            p = array.get(pivotHighs, i)
+            if p > level and (na(nearest) or p < nearest)
+                nearest := p
+    nearest
+
+nearestSwingBelow(level) =>
+    float nearest = na
+    if array.size(pivotLows) > 0
+        for i = 0 to array.size(pivotLows) - 1
+            p = array.get(pivotLows, i)
+            if p < level and (na(nearest) or p > nearest)
+                nearest := p
+    nearest
+
+// ============================================================================
+// 4) COMPTEURS JOURNALIERS (2 pertes max / stop après 1 gain)
+// ============================================================================
+var int  dayLosses = 0
+var int  dayWins = 0
+
+newTradingDay = ta.change(time("D")) != 0
+if newTradingDay
+    dayLosses := 0
+    dayWins := 0
+    breakoutDoneToday := false
+
+var int lastClosedCount = 0
+if strategy.closedtrades > lastClosedCount
+    tradeProfit = strategy.closedtrades.profit(strategy.closedtrades - 1)
+    if tradeProfit > 0
+        dayWins += 1
+    else
+        dayLosses += 1
+    lastClosedCount := strategy.closedtrades
+
+canTradeToday = dayLosses < maxLossesDay and (not stopAfterWin or dayWins < 1)
+
+// ============================================================================
+// 5) FLATTEN DE FIN DE JOURNÉE
+// ============================================================================
+eodFlatten = useEodFlatten and (hour == flattenHour and minute >= flattenMinute)
+if eodFlatten
+    if strategy.position_size != 0
+        strategy.close_all(comment="Flatten fin de journée")
+    strategy.cancel_all()
+
+// ============================================================================
+// 6) DÉTECTION DU BREAKOUT — première clôture 5m hors de l'opening range
+// ============================================================================
+firstBreakoutCheck = not inSession and orLocked and not breakoutDoneToday and canTradeToday and not eodFlatten and withinTradingWindow
+longBreakout  = firstBreakoutCheck and close > orHigh
+shortBreakout = firstBreakoutCheck and close < orLow
+
+atrVal = ta.atr(atrLen)
+minDist = proximityMult * atrVal
+
+nearestHighAbove = nearestSwingAbove(orHigh)
+nearestLowBelow  = nearestSwingBelow(orLow)
+
+// Filtre 1 : le niveau cassé est-il collé au H/L de la session précédente ?
+tooCloseToPrevHigh = usePrevSessionFilter and not na(prevDayHigh) and math.abs(orHigh - prevDayHigh) <= minDist
+tooCloseToPrevLow  = usePrevSessionFilter and not na(prevDayLow)  and math.abs(orLow  - prevDayLow)  <= minDist
+
+// Filtre 2 : y a-t-il de la vraie liquidité (swing) au-delà pour continuer ?
+hasLiquidityAbove = useSwingFilter ? (not na(nearestHighAbove) and (nearestHighAbove - orHigh) > minDist) : true
+hasLiquidityBelow = useSwingFilter ? (not na(nearestLowBelow)  and (orLow - nearestLowBelow)  > minDist) : true
+
+// Invalidation (slide 5) : trop proche du H/L précédent ET pas de liquidité au-delà
+longInvalid  = tooCloseToPrevHigh and not hasLiquidityAbove
+shortInvalid = tooCloseToPrevLow  and not hasLiquidityBelow
+
+if longBreakout or shortBreakout
+    breakoutDoneToday := true
+
+// ============================================================================
+// 7) ENTRÉE — marché si R:R suffisant, sinon ordre limite au retest de l'ORB
+// ============================================================================
+var bool pendingRetestLong   = false
+var bool pendingRetestShort  = false
+var int  retestArmedBarLong  = na
+var int  retestArmedBarShort = na
+
+if longBreakout and not longInvalid
+    entryPrice = close
+    slPrice = orMid
+    tpPrice = orHigh + orStdev
+    riskPts = entryPrice - slPrice
+    rewardPts = tpPrice - entryPrice
+    rr = riskPts > 0 ? rewardPts / riskPts : na
+
+    if riskPts > 0 and rr >= minRR
+        strategy.entry("Long Marché", strategy.long, comment="ORB Long Marché")
+        strategy.exit("Sortie Long", from_entry="Long Marché", stop=slPrice, limit=tpPrice)
+        alert("ORB LONG (marché) @ " + str.tostring(entryPrice, format.mintick) +
+              " | SL " + str.tostring(slPrice, format.mintick) +
+              " | TP " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
+    else if riskPts > 0
+        strategy.entry("Long Retest", strategy.long, limit=orHigh, comment="ORB Long Retest")
+        strategy.exit("Sortie Long Retest", from_entry="Long Retest", stop=slPrice, limit=tpPrice)
+        pendingRetestLong := true
+        retestArmedBarLong := bar_index
+        alert("ORB LONG (retest armé) @ " + str.tostring(orHigh, format.mintick) +
+              " | SL " + str.tostring(slPrice, format.mintick) +
+              " | TP " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
+
+if shortBreakout and not shortInvalid
+    entryPrice = close
+    slPrice = orMid
+    tpPrice = orLow - orStdev
+    riskPts = slPrice - entryPrice
+    rewardPts = entryPrice - tpPrice
+    rr = riskPts > 0 ? rewardPts / riskPts : na
+
+    if riskPts > 0 and rr >= minRR
+        strategy.entry("Short Marché", strategy.short, comment="ORB Short Marché")
+        strategy.exit("Sortie Short", from_entry="Short Marché", stop=slPrice, limit=tpPrice)
+        alert("ORB SHORT (marché) @ " + str.tostring(entryPrice, format.mintick) +
+              " | SL " + str.tostring(slPrice, format.mintick) +
+              " | TP " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
+    else if riskPts > 0
+        strategy.entry("Short Retest", strategy.short, limit=orLow, comment="ORB Short Retest")
+        strategy.exit("Sortie Short Retest", from_entry="Short Retest", stop=slPrice, limit=tpPrice)
+        pendingRetestShort := true
+        retestArmedBarShort := bar_index
+        alert("ORB SHORT (retest armé) @ " + str.tostring(orLow, format.mintick) +
+              " | SL " + str.tostring(slPrice, format.mintick) +
+              " | TP " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
+
+// Annule le retest si le TP est touché avant que le prix ne revienne le chercher.
+// IMPORTANT : on ne vérifie qu'à partir de la barre SUIVANTE — sinon une bougie de
+// breakout qui dépasse déjà le TP sur sa propre clôture annule l'ordre avant même
+// de lui laisser une chance d'être rempli (c'était le bug empêchant tout trade).
+if pendingRetestLong and bar_index > retestArmedBarLong
+    tpLong = orHigh + orStdev
+    if strategy.position_size != 0
+        pendingRetestLong := false
+    else if high >= tpLong
+        strategy.cancel("Long Retest")
+        pendingRetestLong := false
+
+if pendingRetestShort and bar_index > retestArmedBarShort
+    tpShort = orLow - orStdev
+    if strategy.position_size != 0
+        pendingRetestShort := false
+    else if low <= tpShort
+        strategy.cancel("Short Retest")
+        pendingRetestShort := false
+
+// Un ordre de retest encore en attente au-delà de maxSessionHours est annulé :
+// le range est devenu trop "vieux" pour justifier une entrée.
+if not withinTradingWindow
+    if pendingRetestLong
+        strategy.cancel("Long Retest")
+        pendingRetestLong := false
+    if pendingRetestShort
+        strategy.cancel("Short Retest")
+        pendingRetestShort := false
+
+// ============================================================================
+// VISUELS
+// ============================================================================
+bgcolor(inSession ? color.new(color.blue, 85) : na, title="Fenêtre Opening Range")
+
+plot(orLocked ? orHigh : na, "OR High", color=color.new(color.teal, 0), style=plot.style_linebr, linewidth=1)
+plot(orLocked ? orLow  : na, "OR Low",  color=color.new(color.red, 0),  style=plot.style_linebr, linewidth=1)
+plot(orLocked ? orMid  : na, "OR Mid (SL)", color=color.new(color.gray, 40), style=plot.style_linebr, linewidth=1)
+
+plot(prevDayHigh, "Prev Session High", color=color.new(color.orange, 60), style=plot.style_linebr, linewidth=1)
+plot(prevDayLow,  "Prev Session Low",  color=color.new(color.orange, 60), style=plot.style_linebr, linewidth=1)
+
+plotshape(not na(pivotHighVal), title="Swing High", style=shape.triangledown, location=location.abovebar,
+     color=color.fuchsia, size=size.tiny, offset=-pivotLen)
+plotshape(not na(pivotLowVal), title="Swing Low", style=shape.triangleup, location=location.belowbar,
+     color=color.fuchsia, size=size.tiny, offset=-pivotLen)
+
+if longBreakout and longInvalid
+    label.new(bar_index, high, "ORB Long invalidé\n(proche prev high, pas de liquidité)",
+         style=label.style_label_down, color=color.new(color.orange, 20), textcolor=color.white, size=size.small)
+if shortBreakout and shortInvalid
+    label.new(bar_index, low, "ORB Short invalidé\n(proche prev low, pas de liquidité)",
+         style=label.style_label_up, color=color.new(color.orange, 20), textcolor=color.white, size=size.small)
