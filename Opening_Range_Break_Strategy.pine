@@ -38,12 +38,12 @@ pivotLookback = input.int(300, "Barres de recherche des pivots", group=grpInvali
 // INPUTS — Gestion du trade
 // ============================================================================
 grpTrade = "Gestion du trade"
-minRR = input.float(1.0, "R:R minimum pour entrée marché (sinon retest ORB)", group=grpTrade,
-     tooltip="Si la bougie de breakout est trop grosse pour offrir ce R:R au marché, on arme un ordre limite au retest du niveau cassé à la place.")
+minRR = input.float(1.0, "R:R minimum pour entrée marché (sinon pas de trade)", group=grpTrade,
+     tooltip="Si le R:R offert par la bougie de breakout est inférieur à ce seuil, aucun trade n'est pris (pas de retest ni d'ordre en attente).")
 maxLossesDay = input.int(2, "Pertes max par jour", group=grpTrade)
 stopAfterWin = input.bool(true, "Stop trading après 1 gain dans la journée", group=grpTrade)
 maxSessionHours = input.float(3.0, "Durée max de recherche de breakout après clôture OR (heures)", group=grpTrade,
-     tooltip="Passé ce délai après la fin de l'opening range, on arrête de chercher un breakout sur ce range (et on annule tout ordre de retest encore en attente) jusqu'à la prochaine session.")
+     tooltip="Passé ce délai après la fin de l'opening range, on arrête de chercher un breakout sur ce range jusqu'à la prochaine session.")
 
 grpFlatten = "Sécurité"
 useEodFlatten = input.bool(true, "Flatten de sécurité en fin de journée", group=grpFlatten)
@@ -64,11 +64,17 @@ var float orLow  = na
 var int   orBarCount = 0
 var box   orBox = na
 var bool  breakoutDoneToday = false
+// Gestion par session : après une perte, on se redonne une deuxième (et
+// dernière) chance sur le même OR ; après un gain, on arrête cette session.
+var int   sessionTradeCount = 0
+var bool  sessionWinLock    = false
+
+// "na(orHigh)" couvre le cas limite où la toute première barre chargée à
+// l'écran tombe déjà dans une session (inSession[1] vaut alors na, pas false).
+isNewSessionStart = inSession and (not inSession[1] or na(orHigh))
 
 if inSession
-    // "na(orHigh)" couvre le cas limite où la toute première barre chargée à
-    // l'écran tombe déjà dans une session (inSession[1] vaut alors na, pas false).
-    if not inSession[1] or na(orHigh)
+    if isNewSessionStart
         orHigh := high
         orLow := low
         orBarCount := 1
@@ -78,6 +84,8 @@ if inSession
         // chevauchait le changement de jour (même bug que celui déjà corrigé, mais
         // côté "attempt flag" plutôt que côté "fenêtre temporelle").
         breakoutDoneToday := false
+        sessionTradeCount := 0
+        sessionWinLock := false
         // Nouvelle boîte visuelle, mise à jour en direct à chaque barre de la
         // session (mèche haute/basse incluse) — on voit l'OR se former en temps réel.
         orBox := box.new(bar_index, high, bar_index, low, border_color=color.new(color.blue, 40),
@@ -177,8 +185,14 @@ if strategy.closedtrades > lastClosedCount
     tradeProfit = strategy.closedtrades.profit(strategy.closedtrades - 1)
     if tradeProfit > 0
         dayWins += 1
+        // Gagnant : on arrête de chercher un nouveau trade sur cette session.
+        sessionWinLock := true
     else
         dayLosses += 1
+        // Perdant : deuxième (et dernière) chance sur cette session — on
+        // rouvre la recherche de breakout tant que sessionTradeCount < 2.
+        if sessionTradeCount < 2
+            breakoutDoneToday := false
     lastClosedCount := strategy.closedtrades
 
 canTradeToday = dayLosses < maxLossesDay and (not stopAfterWin or dayWins < 1)
@@ -195,7 +209,7 @@ if eodFlatten
 // ============================================================================
 // 6) DÉTECTION DU BREAKOUT — première clôture 5m hors de l'opening range
 // ============================================================================
-firstBreakoutCheck = not inSession and orLocked and not breakoutDoneToday and canTradeToday and not eodFlatten and withinTradingWindow
+firstBreakoutCheck = not inSession and orLocked and not breakoutDoneToday and not sessionWinLock and canTradeToday and not eodFlatten and withinTradingWindow
 longBreakout  = firstBreakoutCheck and close > orHigh
 shortBreakout = firstBreakoutCheck and close < orLow
 
@@ -221,13 +235,9 @@ if longBreakout or shortBreakout
     breakoutDoneToday := true
 
 // ============================================================================
-// 7) ENTRÉE — marché si R:R suffisant, sinon ordre limite au retest de l'ORB
+// 7) ENTRÉE — marché uniquement, sur cassure du CORPS de la bougie (close),
+//    pas de retest : si le R:R est insuffisant, aucun trade n'est pris.
 // ============================================================================
-var bool pendingRetestLong   = false
-var bool pendingRetestShort  = false
-var int  retestArmedBarLong  = na
-var int  retestArmedBarShort = na
-
 if longBreakout and not longInvalid
     entryPrice = close
     slPrice = orMid
@@ -239,15 +249,8 @@ if longBreakout and not longInvalid
     if riskPts > 0 and rr >= minRR
         strategy.entry("Long Marché", strategy.long, comment="ORB Long Marché")
         strategy.exit("Sortie Long", from_entry="Long Marché", stop=slPrice, limit=tpPrice)
+        sessionTradeCount += 1
         alert("ORB LONG (marché) @ " + str.tostring(entryPrice, format.mintick) +
-              " | SL " + str.tostring(slPrice, format.mintick) +
-              " | TP " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
-    else if riskPts > 0
-        strategy.entry("Long Retest", strategy.long, limit=orHigh, comment="ORB Long Retest")
-        strategy.exit("Sortie Long Retest", from_entry="Long Retest", stop=slPrice, limit=tpPrice)
-        pendingRetestLong := true
-        retestArmedBarLong := bar_index
-        alert("ORB LONG (retest armé) @ " + str.tostring(orHigh, format.mintick) +
               " | SL " + str.tostring(slPrice, format.mintick) +
               " | TP " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
 
@@ -262,47 +265,10 @@ if shortBreakout and not shortInvalid
     if riskPts > 0 and rr >= minRR
         strategy.entry("Short Marché", strategy.short, comment="ORB Short Marché")
         strategy.exit("Sortie Short", from_entry="Short Marché", stop=slPrice, limit=tpPrice)
+        sessionTradeCount += 1
         alert("ORB SHORT (marché) @ " + str.tostring(entryPrice, format.mintick) +
               " | SL " + str.tostring(slPrice, format.mintick) +
               " | TP " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
-    else if riskPts > 0
-        strategy.entry("Short Retest", strategy.short, limit=orLow, comment="ORB Short Retest")
-        strategy.exit("Sortie Short Retest", from_entry="Short Retest", stop=slPrice, limit=tpPrice)
-        pendingRetestShort := true
-        retestArmedBarShort := bar_index
-        alert("ORB SHORT (retest armé) @ " + str.tostring(orLow, format.mintick) +
-              " | SL " + str.tostring(slPrice, format.mintick) +
-              " | TP " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
-
-// Annule le retest si le TP est touché avant que le prix ne revienne le chercher.
-// IMPORTANT : on ne vérifie qu'à partir de la barre SUIVANTE — sinon une bougie de
-// breakout qui dépasse déjà le TP sur sa propre clôture annule l'ordre avant même
-// de lui laisser une chance d'être rempli (c'était le bug empêchant tout trade).
-if pendingRetestLong and bar_index > retestArmedBarLong
-    tpLong = orHigh + orStdev
-    if strategy.position_size != 0
-        pendingRetestLong := false
-    else if high >= tpLong
-        strategy.cancel("Long Retest")
-        pendingRetestLong := false
-
-if pendingRetestShort and bar_index > retestArmedBarShort
-    tpShort = orLow - orStdev
-    if strategy.position_size != 0
-        pendingRetestShort := false
-    else if low <= tpShort
-        strategy.cancel("Short Retest")
-        pendingRetestShort := false
-
-// Un ordre de retest encore en attente au-delà de maxSessionHours est annulé :
-// le range est devenu trop "vieux" pour justifier une entrée.
-if not withinTradingWindow
-    if pendingRetestLong
-        strategy.cancel("Long Retest")
-        pendingRetestLong := false
-    if pendingRetestShort
-        strategy.cancel("Short Retest")
-        pendingRetestShort := false
 
 // ============================================================================
 // VISUELS
