@@ -313,6 +313,10 @@ plot(orLocked ? orHigh : na, "OR High", color=color.new(color.teal, 0), style=pl
 plot(orLocked ? orLow  : na, "OR Low",  color=color.new(color.red, 0),  style=plot.style_linebr, linewidth=1)
 plot(orLocked ? orMid  : na, "OR Mid (SL)", color=color.new(color.gray, 40), style=plot.style_linebr, linewidth=1)
 
+// Bandes de standard deviation (= niveaux de TP long/short) autour de l'ORB.
+plot(orLocked ? orHigh + orStdev : na, "OR +1 StDev (TP Long)", color=color.new(color.lime, 20), style=plot.style_linebr, linewidth=1)
+plot(orLocked ? orLow  - orStdev : na, "OR -1 StDev (TP Short)", color=color.new(color.maroon, 20), style=plot.style_linebr, linewidth=1)
+
 plot(prevDayHigh, "Prev Session High", color=color.new(color.orange, 60), style=plot.style_linebr, linewidth=1)
 plot(prevDayLow,  "Prev Session Low",  color=color.new(color.orange, 60), style=plot.style_linebr, linewidth=1)
 
