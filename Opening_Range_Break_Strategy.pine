@@ -101,15 +101,11 @@ if inSession
 sessionJustEnded = not inSession and inSession[1]
 
 var float orMid = na
-var float orHalfRange = na
 var bool  orLocked = false
 var int   sessionEndTime = na
 
 if sessionJustEnded
     orMid := (orHigh + orLow) / 2
-    // Distance mid → extrémité de l'OR (= moitié du range), projetée à
-    // l'identique au-delà du niveau cassé pour former le TP (measured move).
-    orHalfRange := (orHigh - orLow) / 2
     orLocked := true
     sessionEndTime := time
 
@@ -166,6 +162,19 @@ nearestSwingBelow(level) =>
                 nearest := p
     nearest
 
+// Cible figée à la clôture de l'OR : on vise la structure DÉJÀ en place avant
+// la session (ex. un swing formé dans la nuit / avant l'ouverture), pas un
+// micro-swing qui se confirmerait plus tard pendant la recherche du breakout.
+// Sans ce gel, un mouvement tendanciel sans rebond peut retarder l'entrée de
+// plusieurs heures en attendant qu'un swing proche (donc médiocre en R:R) se
+// confirme, alors qu'un swing majeur bien plus tôt existait déjà.
+var float sessionSwingAbove = na
+var float sessionSwingBelow = na
+
+if sessionJustEnded
+    sessionSwingAbove := nearestSwingAbove(orHigh)
+    sessionSwingBelow := nearestSwingBelow(orLow)
+
 // ============================================================================
 // 4) COMPTEURS JOURNALIERS (2 pertes max / stop après 1 gain)
 // ============================================================================
@@ -205,17 +214,26 @@ if eodFlatten
     strategy.cancel_all()
 
 // ============================================================================
-// 6) DÉTECTION DU BREAKOUT — première clôture 5m hors de l'opening range
+// 6) DÉTECTION DU BREAKOUT — clôture 5m qui CASSE l'opening range
+//    Le signal est le franchissement (clôture précédente dans le range,
+//    clôture courante dehors), pas le simple fait d'être hors du range :
+//    sinon, quand la bougie de cassure est refusée (R:R, filtre slide 5),
+//    le code réévaluait chaque bougie suivante et finissait par entrer
+//    40-70 min plus tard, loin du niveau, en plein milieu du mouvement.
+//    Après un refus, il faut que le prix réintègre le range et re-casse
+//    pour générer un nouveau signal.
 // ============================================================================
 firstBreakoutCheck = not inSession and orLocked and not breakoutDoneToday and not sessionWinLock and canTradeToday and not eodFlatten and withinTradingWindow
-longBreakout  = firstBreakoutCheck and close > orHigh
-shortBreakout = firstBreakoutCheck and close < orLow
+crossedAboveOR = close > orHigh and close[1] <= orHigh
+crossedBelowOR = close < orLow  and close[1] >= orLow
+longBreakout  = firstBreakoutCheck and crossedAboveOR
+shortBreakout = firstBreakoutCheck and crossedBelowOR
 
 atrVal = ta.atr(atrLen)
 minDist = proximityMult * atrVal
 
-nearestHighAbove = nearestSwingAbove(orHigh)
-nearestLowBelow  = nearestSwingBelow(orLow)
+nearestHighAbove = sessionSwingAbove
+nearestLowBelow  = sessionSwingBelow
 
 // Filtre 1 : le niveau cassé est-il collé au H/L de la session précédente ?
 tooCloseToPrevHigh = usePrevSessionFilter and not na(prevDayHigh) and math.abs(orHigh - prevDayHigh) <= minDist
@@ -232,16 +250,21 @@ shortInvalid = tooCloseToPrevLow  and not hasLiquidityBelow
 // ============================================================================
 // 7) ENTRÉE — marché uniquement, sur cassure du CORPS de la bougie (close),
 //    pas de retest : si le R:R est insuffisant, aucun trade n'est pris.
+//    TP = swing (liquidité) le plus proche au-delà du niveau cassé, figé à la
+//    clôture de l'OR (sessionSwingAbove/Below) — pas une projection géométrique
+//    arbitraire, et pas un swing qui se formerait plus tard pendant la
+//    recherche du breakout. Si aucun swing n'existait déjà au-delà à ce
+//    moment-là, il n'y a pas de cible de structure valable donc pas de trade.
 //    IMPORTANT : breakoutDoneToday ne se verrouille QUE quand un trade est
 //    réellement entré — une clôture hors range invalidée (slide 5) ou dont le
 //    R:R est insuffisant ne doit pas bloquer les clôtures suivantes de la même
 //    session (sinon un seul signal filtré condamne toute la fenêtre de trading,
 //    même si une meilleure structure apparaît juste après).
 // ============================================================================
-if longBreakout and not longInvalid
+if longBreakout and not longInvalid and not na(nearestHighAbove)
     entryPrice = close
     slPrice = orMid
-    tpPrice = orHigh + orHalfRange
+    tpPrice = nearestHighAbove
     riskPts = entryPrice - slPrice
     rewardPts = tpPrice - entryPrice
     rr = riskPts > 0 ? rewardPts / riskPts : na
@@ -253,12 +276,12 @@ if longBreakout and not longInvalid
         sessionTradeCount += 1
         alert("ORB LONG (marché) @ " + str.tostring(entryPrice, format.mintick) +
               " | SL " + str.tostring(slPrice, format.mintick) +
-              " | TP " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
+              " | TP (swing) " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
 
-if shortBreakout and not shortInvalid
+if shortBreakout and not shortInvalid and not na(nearestLowBelow)
     entryPrice = close
     slPrice = orMid
-    tpPrice = orLow - orHalfRange
+    tpPrice = nearestLowBelow
     riskPts = slPrice - entryPrice
     rewardPts = entryPrice - tpPrice
     rr = riskPts > 0 ? rewardPts / riskPts : na
@@ -270,7 +293,7 @@ if shortBreakout and not shortInvalid
         sessionTradeCount += 1
         alert("ORB SHORT (marché) @ " + str.tostring(entryPrice, format.mintick) +
               " | SL " + str.tostring(slPrice, format.mintick) +
-              " | TP " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
+              " | TP (swing) " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
 
 // ============================================================================
 // VISUELS
@@ -281,9 +304,9 @@ plot(orLocked ? orHigh : na, "OR High", color=color.new(color.teal, 0), style=pl
 plot(orLocked ? orLow  : na, "OR Low",  color=color.new(color.red, 0),  style=plot.style_linebr, linewidth=1)
 plot(orLocked ? orMid  : na, "OR Mid (SL)", color=color.new(color.gray, 40), style=plot.style_linebr, linewidth=1)
 
-// Projection measured move (= niveaux de TP long/short), à 1x la moitié du range de l'ORB.
-plot(orLocked ? orHigh + orHalfRange : na, "OR TP Long (measured move)", color=color.new(color.lime, 20), style=plot.style_linebr, linewidth=1)
-plot(orLocked ? orLow  - orHalfRange : na, "OR TP Short (measured move)", color=color.new(color.maroon, 20), style=plot.style_linebr, linewidth=1)
+// Cible de structure (swing le plus proche au-delà du niveau cassé) = TP potentiel.
+plot(orLocked ? nearestHighAbove : na, "TP Long (swing structure)", color=color.new(color.lime, 20), style=plot.style_linebr, linewidth=1)
+plot(orLocked ? nearestLowBelow  : na, "TP Short (swing structure)", color=color.new(color.maroon, 20), style=plot.style_linebr, linewidth=1)
 
 plot(prevDayHigh, "Prev Session High", color=color.new(color.orange, 60), style=plot.style_linebr, linewidth=1)
 plot(prevDayLow,  "Prev Session Low",  color=color.new(color.orange, 60), style=plot.style_linebr, linewidth=1)
