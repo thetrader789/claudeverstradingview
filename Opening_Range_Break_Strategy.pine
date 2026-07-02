@@ -100,18 +100,16 @@ if inSession
 
 sessionJustEnded = not inSession and inSession[1]
 
-// ta.stdev doit être appelé à chaque barre (hors bloc conditionnel) pour que
-// son état interne reste cohérent ; on ne retient sa valeur qu'à la clôture de l'OR.
-stdevNow = ta.stdev(close, orBarCount > 0 ? orBarCount : 1)
-
 var float orMid = na
-var float orStdev = na
+var float orHalfRange = na
 var bool  orLocked = false
 var int   sessionEndTime = na
 
 if sessionJustEnded
     orMid := (orHigh + orLow) / 2
-    orStdev := stdevNow
+    // Distance mid → extrémité de l'OR (= moitié du range), projetée à
+    // l'identique au-delà du niveau cassé pour former le TP (measured move).
+    orHalfRange := (orHigh - orLow) / 2
     orLocked := true
     sessionEndTime := time
 
@@ -231,17 +229,19 @@ hasLiquidityBelow = useSwingFilter ? (not na(nearestLowBelow)  and (orLow - near
 longInvalid  = tooCloseToPrevHigh and not hasLiquidityAbove
 shortInvalid = tooCloseToPrevLow  and not hasLiquidityBelow
 
-if longBreakout or shortBreakout
-    breakoutDoneToday := true
-
 // ============================================================================
 // 7) ENTRÉE — marché uniquement, sur cassure du CORPS de la bougie (close),
 //    pas de retest : si le R:R est insuffisant, aucun trade n'est pris.
+//    IMPORTANT : breakoutDoneToday ne se verrouille QUE quand un trade est
+//    réellement entré — une clôture hors range invalidée (slide 5) ou dont le
+//    R:R est insuffisant ne doit pas bloquer les clôtures suivantes de la même
+//    session (sinon un seul signal filtré condamne toute la fenêtre de trading,
+//    même si une meilleure structure apparaît juste après).
 // ============================================================================
 if longBreakout and not longInvalid
     entryPrice = close
     slPrice = orMid
-    tpPrice = orHigh + orStdev
+    tpPrice = orHigh + orHalfRange
     riskPts = entryPrice - slPrice
     rewardPts = tpPrice - entryPrice
     rr = riskPts > 0 ? rewardPts / riskPts : na
@@ -249,6 +249,7 @@ if longBreakout and not longInvalid
     if riskPts > 0 and rr >= minRR
         strategy.entry("Long Marché", strategy.long, comment="ORB Long Marché")
         strategy.exit("Sortie Long", from_entry="Long Marché", stop=slPrice, limit=tpPrice)
+        breakoutDoneToday := true
         sessionTradeCount += 1
         alert("ORB LONG (marché) @ " + str.tostring(entryPrice, format.mintick) +
               " | SL " + str.tostring(slPrice, format.mintick) +
@@ -257,7 +258,7 @@ if longBreakout and not longInvalid
 if shortBreakout and not shortInvalid
     entryPrice = close
     slPrice = orMid
-    tpPrice = orLow - orStdev
+    tpPrice = orLow - orHalfRange
     riskPts = slPrice - entryPrice
     rewardPts = entryPrice - tpPrice
     rr = riskPts > 0 ? rewardPts / riskPts : na
@@ -265,6 +266,7 @@ if shortBreakout and not shortInvalid
     if riskPts > 0 and rr >= minRR
         strategy.entry("Short Marché", strategy.short, comment="ORB Short Marché")
         strategy.exit("Sortie Short", from_entry="Short Marché", stop=slPrice, limit=tpPrice)
+        breakoutDoneToday := true
         sessionTradeCount += 1
         alert("ORB SHORT (marché) @ " + str.tostring(entryPrice, format.mintick) +
               " | SL " + str.tostring(slPrice, format.mintick) +
@@ -279,9 +281,9 @@ plot(orLocked ? orHigh : na, "OR High", color=color.new(color.teal, 0), style=pl
 plot(orLocked ? orLow  : na, "OR Low",  color=color.new(color.red, 0),  style=plot.style_linebr, linewidth=1)
 plot(orLocked ? orMid  : na, "OR Mid (SL)", color=color.new(color.gray, 40), style=plot.style_linebr, linewidth=1)
 
-// Bandes de standard deviation (= niveaux de TP long/short) autour de l'ORB.
-plot(orLocked ? orHigh + orStdev : na, "OR +1 StDev (TP Long)", color=color.new(color.lime, 20), style=plot.style_linebr, linewidth=1)
-plot(orLocked ? orLow  - orStdev : na, "OR -1 StDev (TP Short)", color=color.new(color.maroon, 20), style=plot.style_linebr, linewidth=1)
+// Projection measured move (= niveaux de TP long/short), à 1x la moitié du range de l'ORB.
+plot(orLocked ? orHigh + orHalfRange : na, "OR TP Long (measured move)", color=color.new(color.lime, 20), style=plot.style_linebr, linewidth=1)
+plot(orLocked ? orLow  - orHalfRange : na, "OR TP Short (measured move)", color=color.new(color.maroon, 20), style=plot.style_linebr, linewidth=1)
 
 plot(prevDayHigh, "Prev Session High", color=color.new(color.orange, 60), style=plot.style_linebr, linewidth=1)
 plot(prevDayLow,  "Prev Session Low",  color=color.new(color.orange, 60), style=plot.style_linebr, linewidth=1)
