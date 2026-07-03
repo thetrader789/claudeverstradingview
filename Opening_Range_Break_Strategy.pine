@@ -15,9 +15,10 @@ strategy("Opening Range Break Strategy (ORB) — Anti Fake-Breakout", shorttitle
 // INPUTS — Session / Opening Range
 // ============================================================================
 grpSession = "Session & Opening Range"
-sessionChoice = input.string("New York (15:30-15:45 CET)", "Session",
-     options=["New York (15:30-15:45 CET)", "Londres (09:00-09:30 CET)", "Asie (02:00-02:30 CET)", "Personnalisée"],
-     group=grpSession)
+sessionChoice = input.string("Japon + Londres + New York", "Session",
+     options=["Japon + Londres + New York", "New York seule (15:30-15:45)", "Londres seule (09:00-09:30)", "Japon seule (02:00-02:30)", "Personnalisée"],
+     group=grpSession,
+     tooltip="Le mode multi-sessions trade les trois opening ranges de la journée (Japon 02:00-02:30, Londres 09:00-09:30, New York 15:30-15:45, heure de Paris). Leurs fenêtres de recherche (maxSessionHours) ne se chevauchent jamais : chaque nouvelle session réinitialise le range et les compteurs de session. Les limites journalières (pertes max / stop après gain) restent globales sur la journée.")
 customSession = input.session("1530-1545", "Session personnalisée (si 'Personnalisée')", group=grpSession)
 sessionTZ = input.string("Europe/Paris", "Fuseau horaire de la session (CET/CEST)", group=grpSession,
      tooltip="Fuseau IANA (pas un offset fixe) : bascule automatiquement CET (hiver, GMT+1) / CEST (été, GMT+2). Un offset fixe type 'GMT+1' se décale d'1h dès qu'on change d'heure. Ce script doit être appliqué sur un graphique en 5 minutes (règle 'clôture 5m hors range').")
@@ -46,18 +47,32 @@ maxSessionHours = input.float(3.0, "Durée max de recherche de breakout après c
      tooltip="Passé ce délai après la fin de l'opening range, on arrête de chercher un breakout sur ce range jusqu'à la prochaine session.")
 
 grpFlatten = "Sécurité"
-useEodFlatten = input.bool(true, "Flatten de sécurité en fin de journée", group=grpFlatten)
-flattenHour = input.int(23, "Heure de flatten (fuseau du graphique)", minval=0, maxval=23, group=grpFlatten)
-flattenMinute = input.int(0, "Minute de flatten", minval=0, maxval=59, group=grpFlatten)
+useEodFlatten = input.bool(true, "Flatten de sécurité en fin de séance", group=grpFlatten)
+flattenHour = input.int(16, "Heure de flatten (heure de l'EXCHANGE du symbole)", minval=0, maxval=23, group=grpFlatten,
+     tooltip="ATTENTION : la variable Pine 'hour' est dans le fuseau de l'exchange, pas celui du graphique. COMEX (GC) = New York : 16h45 → position fermée juste avant la clôture quotidienne de 17h00 ET (conformité prop firm : flat avant la fin de séance). CME (NQ/MNQ) = Chicago : mettre 15 (15h45 CT). L'ancien défaut 23h00 tombait APRÈS la clôture de séance et ne fermait rien d'utile.")
+flattenMinute = input.int(45, "Minute de flatten", minval=0, maxval=59, group=grpFlatten,
+     tooltip="Le flatten est actif de flattenHour:flattenMinute jusqu'à la fin de cette heure-là (ex. 16:45 → fenêtre 16:45-16:59, soit 3 bougies de 5 min avant la clôture — marge si une bougie manque).")
 
 // ============================================================================
 // 1) SESSION & OPENING RANGE
 // ============================================================================
-sessionString = sessionChoice == "New York (15:30-15:45 CET)" ? "1530-1545" :
-     sessionChoice == "Londres (09:00-09:30 CET)" ? "0900-0930" :
-     sessionChoice == "Asie (02:00-02:30 CET)" ? "0200-0230" : customSession
+// Le multi-sessions est le fallback : toute valeur non reconnue (ex. ancienne
+// option sauvegardée sur le graphique avant un renommage) retombe dessus,
+// plutôt que sur la session personnalisée qui masquerait silencieusement le
+// mode demandé. Trois appels time() distincts (pas une session string à
+// virgules, dont le support n'est pas fiable) combinés en OR.
+singleSessionString = sessionChoice == "Personnalisée" ? customSession :
+     sessionChoice == "New York seule (15:30-15:45)" ? "1530-1545" :
+     sessionChoice == "Londres seule (09:00-09:30)" ? "0900-0930" :
+     sessionChoice == "Japon seule (02:00-02:30)" ? "0200-0230" : ""
+isMultiSession = singleSessionString == ""
 
-inSession = not na(time(timeframe.period, sessionString, sessionTZ))
+inJapanOR  = not na(time(timeframe.period, "0200-0230", sessionTZ))
+inLondonOR = not na(time(timeframe.period, "0900-0930", sessionTZ))
+inNewYorkOR = not na(time(timeframe.period, "1530-1545", sessionTZ))
+inSingleOR = not na(time(timeframe.period, isMultiSession ? "1530-1545" : singleSessionString, sessionTZ))
+
+inSession = isMultiSession ? (inJapanOR or inLondonOR or inNewYorkOR) : inSingleOR
 
 var float orHigh = na
 var float orLow  = na
@@ -162,19 +177,6 @@ nearestSwingBelow(level) =>
                 nearest := p
     nearest
 
-// Cible figée à la clôture de l'OR : on vise la structure DÉJÀ en place avant
-// la session (ex. un swing formé dans la nuit / avant l'ouverture), pas un
-// micro-swing qui se confirmerait plus tard pendant la recherche du breakout.
-// Sans ce gel, un mouvement tendanciel sans rebond peut retarder l'entrée de
-// plusieurs heures en attendant qu'un swing proche (donc médiocre en R:R) se
-// confirme, alors qu'un swing majeur bien plus tôt existait déjà.
-var float sessionSwingAbove = na
-var float sessionSwingBelow = na
-
-if sessionJustEnded
-    sessionSwingAbove := nearestSwingAbove(orHigh)
-    sessionSwingBelow := nearestSwingBelow(orLow)
-
 // ============================================================================
 // 4) COMPTEURS JOURNALIERS (2 pertes max / stop après 1 gain)
 // ============================================================================
@@ -209,9 +211,13 @@ canTradeToday = dayLosses < maxLossesDay and (not stopAfterWin or dayWins < 1)
 // ============================================================================
 eodFlatten = useEodFlatten and (hour == flattenHour and minute >= flattenMinute)
 if eodFlatten
+    // cancel_all AVANT close_all, impérativement : dans l'ordre inverse,
+    // cancel_all annulait aussi l'ordre de fermeture que close_all venait de
+    // soumettre sur la même barre — le flatten ne s'est donc JAMAIS exécuté
+    // (positions tenues overnight, ex. long du 18 juin gardé 34h).
+    strategy.cancel_all()
     if strategy.position_size != 0
         strategy.close_all(comment="Flatten fin de journée")
-    strategy.cancel_all()
 
 // ============================================================================
 // 6) DÉTECTION DU BREAKOUT — clôture 5m qui CASSE l'opening range
@@ -232,8 +238,14 @@ shortBreakout = firstBreakoutCheck and crossedBelowOR
 atrVal = ta.atr(atrLen)
 minDist = proximityMult * atrVal
 
-nearestHighAbove = sessionSwingAbove
-nearestLowBelow  = sessionSwingBelow
+// Swing le plus proche au-delà du niveau, connu AU MOMENT de la bougie de
+// cassure — inclut donc les swings confirmés entre la clôture de l'OR et
+// l'entrée (ex. un swing low formé à 16h30 pour une cassure à 17h40), qui
+// sont souvent la cible la plus logique et la plus proche. Les entrées
+// tardives sont déjà empêchées par la règle de cassure franche (section 6),
+// donc plus besoin de figer cette valeur à la clôture de l'OR.
+nearestHighAbove = nearestSwingAbove(orHigh)
+nearestLowBelow  = nearestSwingBelow(orLow)
 
 // Filtre 1 : le niveau cassé est-il collé au H/L de la session précédente ?
 tooCloseToPrevHigh = usePrevSessionFilter and not na(prevDayHigh) and math.abs(orHigh - prevDayHigh) <= minDist
@@ -250,11 +262,10 @@ shortInvalid = tooCloseToPrevLow  and not hasLiquidityBelow
 // ============================================================================
 // 7) ENTRÉE — marché uniquement, sur cassure du CORPS de la bougie (close),
 //    pas de retest : si le R:R est insuffisant, aucun trade n'est pris.
-//    TP = swing (liquidité) le plus proche au-delà du niveau cassé, figé à la
-//    clôture de l'OR (sessionSwingAbove/Below) — pas une projection géométrique
-//    arbitraire, et pas un swing qui se formerait plus tard pendant la
-//    recherche du breakout. Si aucun swing n'existait déjà au-delà à ce
-//    moment-là, il n'y a pas de cible de structure valable donc pas de trade.
+//    TP = swing (liquidité) le plus proche au-delà du niveau cassé, tel que
+//    connu à la bougie de cassure — pas une projection géométrique arbitraire.
+//    Si aucun swing n'existe au-delà à ce moment-là, il n'y a pas de cible de
+//    structure valable donc pas de trade.
 //    IMPORTANT : breakoutDoneToday ne se verrouille QUE quand un trade est
 //    réellement entré — une clôture hors range invalidée (slide 5) ou dont le
 //    R:R est insuffisant ne doit pas bloquer les clôtures suivantes de la même
