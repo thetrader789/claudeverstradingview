@@ -53,6 +53,12 @@ flattenHour = input.int(16, "Heure de flatten (heure de l'EXCHANGE du symbole)",
 flattenMinute = input.int(45, "Minute de flatten", minval=0, maxval=59, group=grpFlatten,
      tooltip="Le flatten est actif de flattenHour:flattenMinute jusqu'à la fin de cette heure-là (ex. 16:45 → fenêtre 16:45-16:59, soit 3 bougies de 5 min avant la clôture — marge si une bougie manque).")
 
+// Déclaré en DERNIER volontairement : ajouter un input au milieu décale les
+// indices in_N et fait réappliquer les valeurs sauvegardées du graphique aux
+// mauvais champs. (Affiché dans le groupe "Gestion du trade" malgré tout.)
+disableLongsJapanLondon = input.bool(false, "Pas de longs sur Japon et Londres", group=grpTrade,
+     tooltip="En backtest, les longs pris sur les opening ranges Japon et Londres sont largement perdants (les shorts portent la performance). Actif aussi en mode session seule Japon/Londres. Les longs restent autorisés sur New York et en session personnalisée.")
+
 // ============================================================================
 // 1) SESSION & OPENING RANGE
 // ============================================================================
@@ -83,6 +89,9 @@ var bool  breakoutDoneToday = false
 // dernière) chance sur le même OR ; après un gain, on arrête cette session.
 var int   sessionTradeCount = 0
 var bool  sessionWinLock    = false
+// Sens autorisé pour le range en cours, figé à l'ouverture de la session
+// (les fenêtres Japon/Londres/NY ne se chevauchent jamais).
+var bool  orLongsAllowed    = true
 
 // "na(orHigh)" couvre le cas limite où la toute première barre chargée à
 // l'écran tombe déjà dans une session (inSession[1] vaut alors na, pas false).
@@ -101,6 +110,7 @@ if inSession
         breakoutDoneToday := false
         sessionTradeCount := 0
         sessionWinLock := false
+        orLongsAllowed := not (disableLongsJapanLondon and (inJapanOR or inLondonOR))
         // Nouvelle boîte visuelle, mise à jour en direct à chaque barre de la
         // session (mèche haute/basse incluse) — on voit l'OR se former en temps réel.
         orBox := box.new(bar_index, high, bar_index, low, border_color=color.new(color.blue, 40),
@@ -232,7 +242,7 @@ if eodFlatten
 firstBreakoutCheck = not inSession and orLocked and not breakoutDoneToday and not sessionWinLock and canTradeToday and not eodFlatten and withinTradingWindow
 crossedAboveOR = close > orHigh and close[1] <= orHigh
 crossedBelowOR = close < orLow  and close[1] >= orLow
-longBreakout  = firstBreakoutCheck and crossedAboveOR
+longBreakout  = firstBreakoutCheck and crossedAboveOR and orLongsAllowed
 shortBreakout = firstBreakoutCheck and crossedBelowOR
 
 atrVal = ta.atr(atrLen)
