@@ -60,6 +60,8 @@ disableLongsJapanLondon = input.bool(false, "Pas de longs sur Japon et Londres",
      tooltip="En backtest, les longs pris sur les opening ranges Japon et Londres sont largement perdants (les shorts portent la performance). Actif aussi en mode session seule Japon/Londres. Les longs restent autorisés sur New York et en session personnalisée.")
 tpProximityTicks = input.int(10, "Tolérance TP (ticks) — clôture proche du swing = sortie", minval=0, group=grpTrade,
      tooltip="Si une bougie CLÔTURE à moins de X ticks du swing cible sans que la limite ait été touchée, on ferme le trade au marché sur cette clôture plutôt que d'exiger le tick exact (cas du 18 juin : pic à quelques ticks sous le TP puis retournement jusqu'au stop). 0 = désactivé. GC : 1 tick = 0,1 pt ; NQ : 1 tick = 0,25 pt.")
+dynamicTpFollow = input.bool(false, "TP dynamique (suit les nouveaux swings formés après l'entrée)", group=grpTrade,
+     tooltip="Par défaut le TP est figé au swing le plus proche connu à la bougie de cassure, même s'il est lointain — un trade peut alors courir des heures et chevaucher la session suivante. Activé : à chaque nouveau swing confirmé plus proche dans le sens du trade, la limite est déplacée dessus (elle ne peut que se rapprocher, jamais s'éloigner). Le stop (orMid figé à l'entrée) n'est jamais modifié.")
 
 // ============================================================================
 // 1) SESSION & OPENING RANGE
@@ -98,8 +100,13 @@ var bool  sessionWinLock    = false
 // Sens autorisé pour le range en cours, figé à l'ouverture de la session
 // (les fenêtres Japon/Londres/NY ne se chevauchent jamais).
 var bool  orLongsAllowed    = true
-// TP du trade en cours (pour la sortie anticipée par proximité de clôture).
+// TP du trade en cours (pour la sortie anticipée par proximité de clôture,
+// et pour le TP dynamique qui le rapproche au fil des nouveaux swings).
 var float activeTpPrice     = na
+// SL du trade en cours, figé à l'entrée — nécessaire pour réémettre
+// strategy.exit quand le TP dynamique bouge (les deux valeurs doivent être
+// repassées à chaque appel, sinon l'omise est annulée).
+var float activeSlPrice     = na
 
 // "na(orHigh)" couvre le cas limite où la toute première barre chargée à
 // l'écran tombe déjà dans une session (inSession[1] vaut alors na, pas false).
@@ -304,6 +311,7 @@ if longBreakout and not longInvalid and not na(nearestHighAbove)
         breakoutDoneToday := true
         sessionTradeCount += 1
         activeTpPrice := tpPrice
+        activeSlPrice := slPrice
         alert("ORB LONG (marché) @ " + str.tostring(entryPrice, format.mintick) +
               " | SL " + str.tostring(slPrice, format.mintick) +
               " | TP (swing) " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
@@ -322,9 +330,29 @@ if shortBreakout and not shortInvalid and not na(nearestLowBelow)
         breakoutDoneToday := true
         sessionTradeCount += 1
         activeTpPrice := tpPrice
+        activeSlPrice := slPrice
         alert("ORB SHORT (marché) @ " + str.tostring(entryPrice, format.mintick) +
               " | SL " + str.tostring(slPrice, format.mintick) +
               " | TP (swing) " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
+
+// ============================================================================
+// 7bis) TP DYNAMIQUE — au lieu de garder le swing connu à l'entrée (qui peut
+//    être lointain et faire courir le trade des heures, jusque dans la
+//    session suivante), on suit le swing le plus proche à mesure qu'il s'en
+//    forme de nouveaux dans le sens du trade. nearestHighAbove/nearestLowBelow
+//    sont déjà recalculés à chaque barre (section 3) ; par construction un
+//    nouveau pivot ne peut que rapprocher la cible, jamais l'éloigner. Le
+//    stop (activeSlPrice, figé à l'entrée) est toujours repassé tel quel :
+//    strategy.exit() annule tout paramètre non fourni au réappel.
+// ============================================================================
+if dynamicTpFollow and strategy.position_size != 0 and not na(activeTpPrice)
+    candidateTp = strategy.position_size > 0 ? nearestHighAbove : nearestLowBelow
+    if not na(candidateTp) and candidateTp != activeTpPrice
+        activeTpPrice := candidateTp
+        if strategy.position_size > 0
+            strategy.exit("Sortie Long", from_entry="Long Marché", stop=activeSlPrice, limit=activeTpPrice)
+        else
+            strategy.exit("Sortie Short", from_entry="Short Marché", stop=activeSlPrice, limit=activeTpPrice)
 
 // ============================================================================
 // 8) SORTIE ANTICIPÉE — clôture de bougie à moins de X ticks du swing cible :
@@ -339,8 +367,10 @@ if longNearTp or shortNearTp
     strategy.cancel_all()
     strategy.close_all(comment="TP proximité swing")
     activeTpPrice := na
+    activeSlPrice := na
 if strategy.position_size == 0 and not (longBreakout or shortBreakout)
     activeTpPrice := na
+    activeSlPrice := na
 
 // ============================================================================
 // VISUELS
