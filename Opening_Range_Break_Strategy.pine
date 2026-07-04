@@ -58,6 +58,8 @@ flattenMinute = input.int(45, "Minute de flatten", minval=0, maxval=59, group=gr
 // mauvais champs. (Affiché dans le groupe "Gestion du trade" malgré tout.)
 disableLongsJapanLondon = input.bool(false, "Pas de longs sur Japon et Londres", group=grpTrade,
      tooltip="En backtest, les longs pris sur les opening ranges Japon et Londres sont largement perdants (les shorts portent la performance). Actif aussi en mode session seule Japon/Londres. Les longs restent autorisés sur New York et en session personnalisée.")
+tpProximityTicks = input.int(10, "Tolérance TP (ticks) — clôture proche du swing = sortie", minval=0, group=grpTrade,
+     tooltip="Si une bougie CLÔTURE à moins de X ticks du swing cible sans que la limite ait été touchée, on ferme le trade au marché sur cette clôture plutôt que d'exiger le tick exact (cas du 18 juin : pic à quelques ticks sous le TP puis retournement jusqu'au stop). 0 = désactivé. GC : 1 tick = 0,1 pt ; NQ : 1 tick = 0,25 pt.")
 
 // ============================================================================
 // 1) SESSION & OPENING RANGE
@@ -92,6 +94,8 @@ var bool  sessionWinLock    = false
 // Sens autorisé pour le range en cours, figé à l'ouverture de la session
 // (les fenêtres Japon/Londres/NY ne se chevauchent jamais).
 var bool  orLongsAllowed    = true
+// TP du trade en cours (pour la sortie anticipée par proximité de clôture).
+var float activeTpPrice     = na
 
 // "na(orHigh)" couvre le cas limite où la toute première barre chargée à
 // l'écran tombe déjà dans une session (inSession[1] vaut alors na, pas false).
@@ -295,6 +299,7 @@ if longBreakout and not longInvalid and not na(nearestHighAbove)
         strategy.exit("Sortie Long", from_entry="Long Marché", stop=slPrice, limit=tpPrice)
         breakoutDoneToday := true
         sessionTradeCount += 1
+        activeTpPrice := tpPrice
         alert("ORB LONG (marché) @ " + str.tostring(entryPrice, format.mintick) +
               " | SL " + str.tostring(slPrice, format.mintick) +
               " | TP (swing) " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
@@ -312,9 +317,26 @@ if shortBreakout and not shortInvalid and not na(nearestLowBelow)
         strategy.exit("Sortie Short", from_entry="Short Marché", stop=slPrice, limit=tpPrice)
         breakoutDoneToday := true
         sessionTradeCount += 1
+        activeTpPrice := tpPrice
         alert("ORB SHORT (marché) @ " + str.tostring(entryPrice, format.mintick) +
               " | SL " + str.tostring(slPrice, format.mintick) +
               " | TP (swing) " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
+
+// ============================================================================
+// 8) SORTIE ANTICIPÉE — clôture de bougie à moins de X ticks du swing cible :
+//    on prend le profit sur la clôture au lieu d'exiger que la limite soit
+//    touchée au tick près (le marché s'arrête souvent juste sous/sur la
+//    liquidité du swing avant de se retourner).
+// ============================================================================
+tpTolerance = tpProximityTicks * syminfo.mintick
+longNearTp  = tpProximityTicks > 0 and strategy.position_size > 0 and not na(activeTpPrice) and close >= activeTpPrice - tpTolerance
+shortNearTp = tpProximityTicks > 0 and strategy.position_size < 0 and not na(activeTpPrice) and close <= activeTpPrice + tpTolerance
+if longNearTp or shortNearTp
+    strategy.cancel_all()
+    strategy.close_all(comment="TP proximité swing")
+    activeTpPrice := na
+if strategy.position_size == 0 and not (longBreakout or shortBreakout)
+    activeTpPrice := na
 
 // ============================================================================
 // VISUELS
