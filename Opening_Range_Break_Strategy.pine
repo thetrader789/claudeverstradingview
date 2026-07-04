@@ -16,9 +16,9 @@ strategy("Opening Range Break Strategy (ORB) — Anti Fake-Breakout", shorttitle
 // ============================================================================
 grpSession = "Session & Opening Range"
 sessionChoice = input.string("Japon + Londres + New York", "Session",
-     options=["Japon + Londres + New York", "New York seule (15:30-15:45)", "Londres seule (09:00-09:30)", "Japon seule (02:00-02:30)", "Personnalisée"],
+     options=["Japon + Londres + New York", "New York seule (15:30-15:45)", "Londres seule (09:00-09:30)", "Japon seule (02:00-02:25)", "Personnalisée"],
      group=grpSession,
-     tooltip="Le mode multi-sessions trade les trois opening ranges de la journée (Japon 02:00-02:30, Londres 09:00-09:30, New York 15:30-15:45, heure de Paris). Leurs fenêtres de recherche (maxSessionHours) ne se chevauchent jamais : chaque nouvelle session réinitialise le range et les compteurs de session. Les limites journalières (pertes max / stop après gain) restent globales sur la journée.")
+     tooltip="Le mode multi-sessions trade les trois opening ranges de la journée (Japon 02:00-02:25, Londres 09:00-09:30, New York 15:30-15:45, heure de Paris). Leurs fenêtres de recherche (maxSessionHours) ne se chevauchent jamais : chaque nouvelle session réinitialise le range et les compteurs de session. Les limites journalières (pertes max / stop après gain) restent globales sur la journée. L'OR Japon se ferme à 02:25 (et non 02:30) pour que la première bougie de cassure éligible clôture à 02:30 pile — aucune entrée ne peut être exécutée avant 02:30.")
 customSession = input.session("1530-1545", "Session personnalisée (si 'Personnalisée')", group=grpSession)
 sessionTZ = input.string("Europe/Paris", "Fuseau horaire de la session (CET/CEST)", group=grpSession,
      tooltip="Fuseau IANA (pas un offset fixe) : bascule automatiquement CET (hiver, GMT+1) / CEST (été, GMT+2). Un offset fixe type 'GMT+1' se décale d'1h dès qu'on change d'heure. Ce script doit être appliqué sur un graphique en 5 minutes (règle 'clôture 5m hors range').")
@@ -72,10 +72,14 @@ tpProximityTicks = input.int(10, "Tolérance TP (ticks) — clôture proche du s
 singleSessionString = sessionChoice == "Personnalisée" ? customSession :
      sessionChoice == "New York seule (15:30-15:45)" ? "1530-1545" :
      sessionChoice == "Londres seule (09:00-09:30)" ? "0900-0930" :
-     sessionChoice == "Japon seule (02:00-02:30)" ? "0200-0230" : ""
+     sessionChoice == "Japon seule (02:00-02:25)" ? "0200-0225" : ""
 isMultiSession = singleSessionString == ""
 
-inJapanOR  = not na(time(timeframe.period, "0200-0230", sessionTZ))
+// L'OR Japon ferme à 02:25 (pas 02:30) volontairement : la première bougie
+// "hors session" (donc éligible à une cassure) est celle ouverte à 02:25 et
+// clôturée à 02:30 — avec process_orders_on_close=true, l'entrée la plus
+// précoce possible s'exécute à 02:30 pile, jamais avant.
+inJapanOR  = not na(time(timeframe.period, "0200-0225", sessionTZ))
 inLondonOR = not na(time(timeframe.period, "0900-0930", sessionTZ))
 inNewYorkOR = not na(time(timeframe.period, "1530-1545", sessionTZ))
 inSingleOR = not na(time(timeframe.period, isMultiSession ? "1530-1545" : singleSessionString, sessionTZ))
