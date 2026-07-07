@@ -1,0 +1,1065 @@
+//@version=6
+strategy("15h30", pyramiding = 0, overlay = true, margin_long = 5, margin_short = 5, max_lines_count = 500, max_labels_count = 500, slippage=2)
+
+
+
+
+newsDays = input.string(
+     "",
+     "News 20h00 (ex: 1,5,12,30)",
+     group="20h00"
+)
+
+// ─── Calendrier News 14h30 (jour du mois) ──────────────────────────────────────
+news1430_01 = input.bool(false, "1",  group="14h30", inline="n1")
+news1430_02 = input.bool(false, "2",  group="14h30", inline="n1")
+news1430_03 = input.bool(false, "3",  group="14h30", inline="n1")
+news1430_04 = input.bool(false, "4",  group="14h30", inline="n1")
+news1430_05 = input.bool(false, "5",  group="14h30", inline="n1")
+news1430_06 = input.bool(false, "6",  group="14h30", inline="n1")
+news1430_07 = input.bool(false, "7",  group="14h30", inline="n1")
+news1430_08 = input.bool(false, "8",  group="14h30", inline="n1")
+news1430_09 = input.bool(false, "9",  group="14h30", inline="n1")
+news1430_10 = input.bool(false, "10", group="14h30", inline="n1")
+news1430_11 = input.bool(false, "11", group="14h30", inline="n2")
+news1430_12 = input.bool(false, "12", group="14h30", inline="n2")
+news1430_13 = input.bool(false, "13", group="14h30", inline="n2")
+news1430_14 = input.bool(false, "14", group="14h30", inline="n2")
+news1430_15 = input.bool(false, "15", group="14h30", inline="n2")
+news1430_16 = input.bool(false, "16", group="14h30", inline="n2")
+news1430_17 = input.bool(false, "17", group="14h30", inline="n2")
+news1430_18 = input.bool(false, "18", group="14h30", inline="n2")
+news1430_19 = input.bool(false, "19", group="14h30", inline="n2")
+news1430_20 = input.bool(false, "20", group="14h30", inline="n2")
+news1430_21 = input.bool(false, "21", group="14h30", inline="n3")
+news1430_22 = input.bool(false, "22", group="14h30", inline="n3")
+news1430_23 = input.bool(false, "23", group="14h30", inline="n3")
+news1430_24 = input.bool(false, "24", group="14h30", inline="n3")
+news1430_25 = input.bool(false, "25", group="14h30", inline="n3")
+news1430_26 = input.bool(false, "26", group="14h30", inline="n3")
+news1430_27 = input.bool(false, "27", group="14h30", inline="n3")
+news1430_28 = input.bool(false, "28", group="14h30", inline="n3")
+news1430_29 = input.bool(false, "29", group="14h30", inline="n3")
+news1430_30 = input.bool(false, "30", group="14h30", inline="n3")
+news1430_31 = input.bool(false, "31", group="14h30", inline="n4")
+
+
+
+
+var line myLineClose = na
+var line myLineOpen = na
+
+var float currentPeriod = na
+var float lastPeriod = na
+
+var float openValue = na
+var float closeValue = na
+
+var float entry_price = na
+var float stop_price = na
+var float tp_price = na
+
+var float minAtrUp = na
+var float minAtrDown = na
+
+// ─── Break-even à 1R (continuations) ─────────────────────────────────────────
+var float beTarget = na
+var bool  beArmed  = false
+
+var bool muchSell = false
+var bool muchBuy = false
+
+var bool continuePeriod = true
+
+var string tradeType = ""
+
+var int maxCount = 100
+
+max_bars_in_trade = 20
+
+vol = volume[0]
+avg = ta.sma(vol, 5)
+
+var float[] structures = array.new_float()
+
+hourCET   = hour(time, "Europe/Paris")
+minuteCET = minute(time, "Europe/Paris")
+dayCET = dayofmonth(time, "Europe/Paris")
+
+float tp = na
+float sp = na
+
+tick = syminfo.mintick
+atr5 = ta.atr(5)
+
+if atr5 >= 20
+    sp := 50
+    tp := 75
+else if atr5 < 7
+    sp := 16.5
+    tp := 24.75
+else
+    sp := 25
+    tp := 38.5
+
+bodyHigh = math.max(open, close)
+bodyLow = math.min(open, close)
+
+candleBuy = close > open
+candleSell = open > close
+
+
+
+
+isNews2000Today = str.contains("," + newsDays + ",", "," + str.tostring(dayCET) + ",")
+
+
+
+isNews1430Today =
+     (dayCET == 1 and news1430_01) or
+     (dayCET == 2 and news1430_02) or
+     (dayCET == 3 and news1430_03) or
+     (dayCET == 4 and news1430_04) or
+     (dayCET == 5 and news1430_05) or
+     (dayCET == 6 and news1430_06) or
+     (dayCET == 7 and news1430_07) or
+     (dayCET == 8 and news1430_08) or
+     (dayCET == 9 and news1430_09) or
+     (dayCET == 10 and news1430_10) or
+     (dayCET == 11 and news1430_11) or
+     (dayCET == 12 and news1430_12) or
+     (dayCET == 13 and news1430_13) or
+     (dayCET == 14 and news1430_14) or
+     (dayCET == 15 and news1430_15) or
+     (dayCET == 16 and news1430_16) or
+     (dayCET == 17 and news1430_17) or
+     (dayCET == 18 and news1430_18) or
+     (dayCET == 19 and news1430_19) or
+     (dayCET == 20 and news1430_20) or
+     (dayCET == 21 and news1430_21) or
+     (dayCET == 22 and news1430_22) or
+     (dayCET == 23 and news1430_23) or
+     (dayCET == 24 and news1430_24) or
+     (dayCET == 25 and news1430_25) or
+     (dayCET == 26 and news1430_26) or
+     (dayCET == 27 and news1430_27) or
+     (dayCET == 28 and news1430_28) or
+     (dayCET == 29 and news1430_29) or
+     (dayCET == 30 and news1430_30) or
+     (dayCET == 31 and news1430_31)
+
+
+
+// Fonction pour convertir HH:MM en minutes depuis minuit
+toMinutes(h, m) =>
+    h * 60 + m
+
+// Fonction pour vérifier si on est dans une plage
+inRange(startMin, offsetStart, offsetEnd) =>
+    current = hourCET * 60 + minuteCET
+    sessionStart = startMin + offsetStart
+    sessionEnd = startMin + offsetEnd
+
+    // gestion passage minuit
+    if sessionEnd >= 1440
+        current >= sessionStart or current <= sessionEnd - 1440
+    else if sessionStart < 0
+        current <= sessionEnd or current >= sessionStart + 1440
+    else
+        current >= sessionStart and current <= sessionEnd
+
+
+// ======================
+// SEULEMENT LES STARTS
+// ======================
+
+startUSA     = toMinutes(15, 29)
+startMidnight = toMinutes(0, 0)
+startJapan   = toMinutes(1, 59)
+startLondon  = toMinutes(8, 59)
+
+startNews1430 = isNews1430Today ? toMinutes(14, 29) : na
+startNews2000 = isNews2000Today ? toMinutes(19, 59) : na
+
+// ======================
+// CONDITIONS AUTO
+// ======================
+
+conditionStart =
+     inRange(startUSA, 0, 0) or
+     inRange(startMidnight, 0, 0) or
+     inRange(startJapan, 0, 0) or
+     inRange(startLondon, 0, 0) or
+     (not na(startNews1430) and inRange(startNews1430, 0, 0)) or
+     (not na(startNews2000) and inRange(startNews2000, 0, 0))
+
+
+
+tradeTimeUSA = inRange(startUSA, 1, 90)
+tradeTimeMidnight = inRange(startMidnight, 0, 89)
+tradeTimeJapan = inRange(startJapan, 1, 90)
+tradeTimeLondon = inRange(startLondon, 1, 90)
+tradeTimeNews1430 = (not na(startNews1430) and inRange(startNews1430, 1, 60))
+tradeTimeNews2000 = (not na(startNews2000) and inRange(startNews2000, 1, 90))
+
+tradeTime =
+     tradeTimeUSA
+     or
+     tradeTimeMidnight
+     or
+     tradeTimeJapan
+     or
+     tradeTimeLondon
+     or
+     tradeTimeNews1430
+     or
+     tradeTimeNews2000
+
+swingTimeUSA = inRange(startUSA, -59, 90)
+swingTimeMidnight = inRange(startMidnight, -60, 89)
+swingTimeJapan = inRange(startJapan, -59, 90)
+swingTimeLondon = inRange(startLondon, -59, 90)
+swingTimeNews1430 = (not na(startNews1430) and inRange(startNews1430, -59, 60))
+swingTimeNews2000 = (not na(startNews2000) and inRange(startNews2000, -59, 90))
+
+swingTime =
+     swingTimeUSA
+     or
+     swingTimeMidnight
+     or
+     swingTimeJapan
+     or
+     swingTimeLondon
+     or
+     swingTimeNews1430
+     or
+     swingTimeNews2000
+
+
+
+if strategy.position_size == 0
+    entry_price := na
+    stop_price := na
+    tp_price := na
+    minAtrUp:= na
+    minAtrDown := na
+    beTarget := na
+    beArmed := false
+
+// ─── Re-entrée après perte : libère la fenêtre continuation pour un nouveau BOS ───
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    nClosed = strategy.closedtrades
+    if nClosed > 0
+        if strategy.closedtrades.profit(nClosed - 1) < 0
+            continuePeriod := true
+
+
+if conditionStart
+    openValue := open
+    closeValue := close
+
+    structures := array.new_float()
+
+    trend30m = (close - close[30]) / close[30] * 100
+
+    muchSell := false
+    muchBuy := false
+
+    continuePeriod := true
+
+
+    muchSell := trend30m < -0.2
+    muchBuy := trend30m > 0.2
+
+
+    if tradeTimeUSA
+        lastPeriod := na
+
+    if tradeTimeMidnight
+        lastPeriod := currentPeriod
+
+    else if tradeTimeJapan
+        lastPeriod := currentPeriod
+
+    else if tradeTimeLondon
+        lastPeriod := currentPeriod
+
+    currentPeriod := openValue
+
+
+zoneHigh = math.max(openValue, closeValue)
+zoneLow = math.min(openValue, closeValue)
+
+// ─── Sens de la bougie de référence (open de session) ────────────────────────
+refBull = closeValue > openValue
+refBear = openValue > closeValue
+
+buffer = 20
+
+longTime = tradeTime and high < closeValue
+shortTime = tradeTime and low > closeValue
+
+bodySize = math.abs(bodyHigh - bodyLow)
+
+var float pushWickSize = na
+var float highWickSize = na
+var float lowWickSize = na
+
+highWickSize := high - bodyHigh
+lowWickSize := bodyLow - low
+
+if longTime
+    pushWickSize := highWickSize
+if shortTime
+    pushWickSize := lowWickSize
+
+tooMuchWick = pushWickSize > bodySize * 0.4
+
+tooCloseOfMean = bodyHigh >= zoneLow - buffer and bodyLow <= zoneHigh + buffer
+
+canTrade = not tooCloseOfMean
+
+volCond = volume > avg
+
+lastStart = ta.barssince(conditionStart)
+
+
+// 3. Volatilité - éviter les marchés calmes/ranging
+atrFilter = ta.atr(14)> ta.atr(14)[20]  // ATR en expansion
+
+
+length = 5
+m = input(1.5, "Multiplier")
+src1 = input(high)
+src2 = input(low)
+pline = input(true, "Show Price Lines")
+col1 = input(color.blue, "ATR Text Color")
+col2 = input(color.teal, "Low Text Color",inline ="1")
+col3 = input(color.red, "High Text Color",inline ="2")
+
+collong = input(color.teal, "Low Line Color",inline ="1")
+colshort = input(color.red, "High Line Color",inline ="2")
+
+a = ta.rma(ta.tr(true), length) * m
+x = ta.rma(ta.tr(true), length) * m + src1
+x2 = src2 - ta.rma(ta.tr(true), length) * m
+
+p1 = plot(x, title = "ATR Short Stop Loss", color= colshort, trackprice = pline ? true : false)
+p2 = plot(x2, title = "ATR Long Stop Loss", color= collong, trackprice = pline ? true : false)
+
+
+// Inputs
+swingSizeR1       = input.int(3, 'Rejection Swing ', inline='brl')
+swingSizeL1       = input.int(3, '-', inline='brl')
+swingSizeR2       = input.int(6, 'Continuation Swing ', inline='brl')
+swingSizeL2       = input.int(6, '-', inline='brl')
+showBoxes        = false
+showSwingLines   = true
+showBubbles      = true
+showVol          = false
+extendtilfilled  = true
+
+// ─── TJR : confirmation structurelle + setup armé ───────────────────────────
+// Filtres BOS désactivés par défaut (07/07) : l'échantillon de backtest est trop
+// court pour valider leur fiabilité (choix utilisateur).
+useStructFilterLong  = input.bool(false, 'Filtre BOS structurel — Longs', group='TJR')
+useStructFilterShort = input.bool(false, 'Filtre BOS structurel — Shorts', group='TJR')
+armBars              = input.int(5, 'Validité setup armé (bougies, 0 = comportement original)', minval=0, group='TJR')
+
+// ─── Continuation : fenêtre + sens de la bougie de référence ─────────────────
+// Défaut 10 min : A/B du 07/07 — fenêtre 10 retire le plus gros short perdant
+// (+128 800 $/PF 2,59 vs +118 700/2,30 en 15 min, gagnants identiques)
+contWinMin = input.int(10, 'Fenêtre continuation (minutes)', minval=1, group='TJR')
+useRefDir  = input.bool(true, 'Continuation : suivre le sens de la bougie de référence', group='TJR')
+
+// ─── Corrections 07/07 (revue des trades perdants) ───────────────────────────
+// 1. Réversion : le break d'une seule bougie après un fort déplacement est un
+//    faux signal fréquent (ex. 22/06 16h01). Confirmation exigée :
+//    'Engulfante' = le corps couvre le corps de la bougie précédente ;
+//    'Cassure 2 bougies' = clôture au-delà des extrêmes des 2 dernières bougies
+//    (variante assouplie qui rejette le break 1-bougie sans jeter le reste)
+revConfirm   = input.string('Cassure 2 bougies', 'Réversion : confirmation requise', options=['Aucune', 'Engulfante', 'Cassure 2 bougies'], group='TJR')
+// 2. Réversion : TP au bord PROCHE de la zone FP — openValue peut être le bord
+//    opposé selon le sens de la bougie de référence (ex. short 23/06 16h40 resté
+//    ouvert jusqu'à 20h40 au lieu de clôturer au premier contact de la zone)
+tpNearEdge   = input.bool(true, 'Réversion : TP au bord proche de la zone FP', group='TJR')
+// 3. Continuation : break-even une fois 1R atteint (ex. long 24/06 02h08 :
+//    +14 950 $ d'excursion favorable finie à -10 100 $)
+useBE        = input.bool(true, 'Continuation : break-even à 1R', group='TJR')
+
+// ─── TJR lot A/B/C : stop structurel + RR + re-entrées ───────────────────────
+// useStructStop désactivé par défaut : sur le backtest 19/06→07/07 le stop ATR
+// par paliers reste meilleur (PF 1,74 vs 1,66, DD 40 350 vs 45 350)
+useStructStop    = input.bool(false, 'Stop structurel (au-delà du swing)', group='TJR')
+stopLookback     = input.int(12, 'Lookback du stop (bougies)', minval=2, group='TJR')
+structBuffer     = input.float(2.0, 'Buffer stop (points)', minval=0, group='TJR')
+minStopPts       = input.float(10.0, 'Stop minimum (points)', minval=1, group='TJR')
+maxStopPts       = input.float(50.0, 'Stop maximum (points)', minval=5, group='TJR')
+minRR            = input.float(1.0, 'RR minimum vers le fair price', minval=0, step=0.25, group='TJR')
+maxEntriesWin    = input.int(3, 'Entrées max par fenêtre', minval=1, group='TJR')
+reEnterAfterLoss = input.bool(true, 'Re-entrée après SL (thèse intacte)', group='TJR')
+reArmBars        = input.int(20, 'Fenêtre re-entrée après SL (bougies)', minval=1, group='TJR')
+liteReentry      = input.bool(true, 'Re-entrée allégée (bougie + cassure + FP)', group='TJR')
+debugRearm       = input.bool(false, 'Debug re-entrées (table échecs filtres)', group='TJR')
+
+// Conditions
+hidefilled       = input.bool(false, 'Hide Filled', group='Conditions')
+voltresh = input.int(0, 'Volume >', group='Conditions')
+
+// Appearance inputs
+showhighs        = true
+showlows         = true
+sellcol          = #aa2430
+buycol           = #66bb6a
+sellcolB         = #aa2430
+buycolB          = #66bb6a
+sellboxCol       = #80192231
+buyboxCol        = #66bb6a31
+lineStyle        = 'Dotted'
+lineWid          = 1
+boxWid           = 0.7
+boxStyle         = 'TYPE 1'
+labelsize        = 'Size: Tiny'
+texthalign       = 'Right'
+lookback         = false
+
+inRange          = true
+
+// ─── Fix #4 : réinitialisation propre à chaque bougie ───────────────────────
+pivHi1 = ta.pivothigh(high, swingSizeL1, swingSizeR1)
+pivLo1 = ta.pivotlow (low,  swingSizeL1, swingSizeR1)
+pivHi2 = ta.pivothigh(high, swingSizeL2, swingSizeR2)
+pivLo2 = ta.pivotlow (low,  swingSizeL2, swingSizeR2)
+
+// Fix #4 : flags toujours recalculés, jamais bloqués sur true
+bool h1 = not na(pivHi1)
+bool l1 = not na(pivLo1)
+bool h2 = not na(pivHi2)
+bool l2 = not na(pivLo2)
+
+var int prevHighIndex1 = na
+var int prevLowIndex1  = na
+var int prevHighIndex2 = na
+var int prevLowIndex2  = na
+
+if h1
+    prevHighIndex1 := bar_index - swingSizeR1
+if l1
+    prevLowIndex1  := bar_index - swingSizeR1
+if h2
+    prevHighIndex2 := bar_index - swingSizeR2
+if l2
+    prevLowIndex2  := bar_index - swingSizeR2
+
+// ─── TJR Fix D : biais structurel — BOS confirmé en clôture sur pivots série 2 ─
+// +1 : dernier swing high série 2 cassé en clôture (structure haussière confirmée)
+// -1 : dernier swing low série 2 cassé en clôture (structure baissière confirmée)
+var int   structBias = 0
+var float lastHi2    = na
+var float lastLo2    = na
+if h2
+    lastHi2 := pivHi2
+if l2
+    lastLo2 := pivLo2
+if not na(lastHi2) and close > lastHi2
+    structBias := 1
+if not na(lastLo2) and close < lastLo2
+    structBias := -1
+
+// ─── TJR Fix A : niveau de stop structurel (extrême récent ± buffer) ─────────
+structStopLongLvl  = ta.lowest(low,   stopLookback) - structBuffer
+structStopShortLvl = ta.highest(high, stopLookback) + structBuffer
+
+color CLEAR = color.rgb(0, 0, 0, 100)
+boxWid1     = 0.001 * boxWid
+
+// ─── Fix #3 : boxStyle paramétré (level + isHigh) ───────────────────────────
+boxStyleVal(level, isHigh) =>
+    switch boxStyle
+        'TYPE 1' => level
+        'TYPE 2' => isHigh ? level * (1 - boxWid1) : level * (1 + boxWid1)
+
+lineStyle(x) =>
+    switch x
+        'Solid'  => line.style_solid
+        'Dashed' => line.style_dashed
+        'Dotted' => line.style_dotted
+
+switchtextsize(textsize) =>
+    switch textsize
+        'Size: Normal' => size.normal
+        'Size: Small'  => size.small
+        'Size: Tiny'   => size.tiny
+        'Size: Auto'   => size.auto
+        'Size: Large'  => size.large
+
+switchhalign(texthalign) =>
+    switch texthalign
+        'Middle' => text.align_center
+        'Right'  => text.align_right
+        'Left'   => text.align_left
+
+// ─── Fix #5 : tableaux séparés pour chaque série ────────────────────────────
+var levelBoxes1 = array.new_box()
+var levelLines1 = array.new_line()
+
+var levelBoxes2 = array.new_box()
+var levelLines2 = array.new_line()
+
+var swingTypes = array.new_string()
+
+// ─── TJR Fix E : événements de fill du bar courant + setups armés ────────────
+// "high"/"low" = fill d'un niveau série 2, "s1" = fill d'un niveau série 1
+var string[] fillEvents = array.new_string()
+
+var int armContLongBar  = na
+var int armContShortBar = na
+var int armRevLongBar   = na
+var int armRevShortBar  = na
+
+// ─── TJR Fix C : compteur d'entrées par fenêtre + suivi des ré-armements ─────
+var int entriesWindow = 0
+var int rearmLongBar  = na
+var int rearmShortBar = na
+
+if h1 and inRange and showhighs and longTime
+    hBox  = box.new(
+         prevHighIndex1,
+         pivHi1 * (1 + boxWid1),
+         bar_index,
+         boxStyleVal(pivHi1, true),
+         border_color = na,
+         bgcolor      = showBoxes ? sellboxCol : CLEAR,
+         text_halign  = switchhalign(texthalign),
+         text_valign  = text.align_center,
+         text_color   = chart.fg_color,
+         text_size    = switchtextsize(labelsize))
+    hLine = line.new(prevHighIndex1, pivHi1, bar_index, pivHi1,
+         color = showSwingLines ? sellcol : CLEAR,
+         style = lineStyle(lineStyle),
+         width = lineWid)
+    array.push(levelBoxes1, hBox)
+    array.push(levelLines1, hLine)
+
+if l1 and inRange and showlows and shortTime
+    lBox  = box.new(
+         prevLowIndex1,
+         pivLo1 * (1 - boxWid1),
+         bar_index,
+         boxStyleVal(pivLo1, false),
+         border_color = na,
+         bgcolor      = showBoxes ? buyboxCol : CLEAR,
+         text_halign  = switchhalign(texthalign),
+         text_valign  = text.align_center,
+         text_color   = chart.fg_color,
+         text_size    = switchtextsize(labelsize))
+    lLine = line.new(prevLowIndex1, pivLo1, bar_index, pivLo1,
+         color = showSwingLines ? buycol : CLEAR,
+         style = lineStyle(lineStyle),
+         width = lineWid)
+    array.push(levelBoxes1, lBox)
+    array.push(levelLines1, lLine)
+
+if h2 and inRange and showhighs
+    hBox2  = box.new(
+         prevHighIndex2,
+         pivHi2 * (1 + boxWid1),
+         bar_index,
+         boxStyleVal(pivHi2, true),
+         border_color = na,
+         bgcolor      = showBoxes ? sellboxCol : CLEAR,
+         text_halign  = switchhalign(texthalign),
+         text_valign  = text.align_center,
+         text_color   = chart.fg_color,
+         text_size    = switchtextsize(labelsize))
+    hLine2 = line.new(prevHighIndex2, pivHi2, bar_index, pivHi2,
+         color = color.orange,
+         width = 2)
+    array.push(levelBoxes2, hBox2)
+    array.push(levelLines2, hLine2)
+    array.push(swingTypes, "high")
+
+if l2 and inRange and showlows
+    lBox2  = box.new(
+         prevLowIndex2,
+         pivLo2 * (1 - boxWid1),
+         bar_index,
+         boxStyleVal(pivLo2, false),
+         border_color = na,
+         bgcolor      = showBoxes ? buyboxCol : CLEAR,
+         text_halign  = switchhalign(texthalign),
+         text_valign  = text.align_center,
+         text_color   = chart.fg_color,
+         text_size    = switchtextsize(labelsize))
+    lLine2 = line.new(prevLowIndex2, pivLo2, bar_index, pivLo2,
+         color = color.blue,
+         width = 2)
+    array.push(levelBoxes2, lBox2)
+    array.push(levelLines2, lLine2)
+    array.push(swingTypes, "low")
+
+// ─── TJR Fix E : manageLevel ne prend plus les trades, il signale les fills ──
+manageLevel(boxes, lines, seriesId) =>
+    sz = array.size(boxes)
+    if sz > 0
+        for i = 0 to sz - 1
+            j = sz - 1 - i
+            b     = array.get(boxes, j)
+            ln    = array.get(lines, j)
+            level = line.get_y2(ln)
+
+            filled = (bodyHigh >= level and bodyLow <= level)
+
+            if filled and extendtilfilled and not hidefilled
+                array.remove(lines, j)
+                array.remove(boxes, j)
+
+                if seriesId == 2
+                    swingType = array.get(swingTypes, j)
+                    array.remove(swingTypes, j)
+                    array.push(fillEvents, swingType)
+                else
+                    array.push(fillEvents, "s1")
+
+                continue
+
+            box.set_right(b, bar_index + 1)
+            line.set_x2(ln, bar_index + 1)
+
+            if not swingTime
+                array.remove(lines, j)
+                array.remove(boxes, j)
+                if seriesId == 2
+                    array.remove(swingTypes, j)
+                line.delete(ln)
+                box.delete(b)
+
+// ─── Application sur les deux séries ─────────────────────────────────────────
+array.clear(fillEvents)
+manageLevel(levelBoxes1, levelLines1, 1)
+manageLevel(levelBoxes2, levelLines2, 2)
+
+// ─── TJR : armement des setups sur fill de niveau ────────────────────────────
+if conditionStart
+    armContLongBar  := na
+    armContShortBar := na
+    armRevLongBar   := na
+    armRevShortBar  := na
+    entriesWindow   := 0
+    rearmLongBar    := na
+    rearmShortBar   := na
+
+fillS2High = array.includes(fillEvents, "high")
+fillS2Low  = array.includes(fillEvents, "low")
+anyFill    = array.size(fillEvents) > 0
+
+contWindow = tradeTime and not conditionStart and lastStart <= contWinMin and not tradeTimeMidnight and not tradeTimeUSA
+
+if fillS2High and contWindow
+    armContLongBar := bar_index
+if fillS2Low and contWindow
+    armContShortBar := bar_index
+if anyFill and longTime
+    armRevLongBar := bar_index
+if anyFill and shortTime
+    armRevShortBar := bar_index
+
+// ─── TJR Fix C : re-entrée après SL perdant si la thèse reverse est intacte ──
+bool justLost = strategy.position_size == 0 and strategy.position_size[1] != 0
+     and strategy.closedtrades > 0
+     and strategy.closedtrades.profit(strategy.closedtrades - 1) < 0
+if justLost and reEnterAfterLoss
+    if longTime
+        armRevLongBar := bar_index
+        rearmLongBar  := bar_index
+    if shortTime
+        armRevShortBar := bar_index
+        rearmShortBar  := bar_index
+
+armOk(int b) =>
+    not na(b) and bar_index - b <= armBars
+
+liteArmOk(int b) =>
+    not na(b) and bar_index - b <= reArmBars
+
+// Fix D : long seulement si structure haussière confirmée, short si baissière
+structLongOk  = not useStructFilterLong or structBias == 1
+structShortOk = not useStructFilterShort or structBias == -1
+
+// Continuation : uniquement dans le sens de la bougie de référence
+refDirLongOk  = not useRefDir or refBull
+refDirShortOk = not useRefDir or refBear
+
+// Réversion : confirmation renforcée du signal
+// 'Engulfante' : le corps couvre tout le corps de la bougie précédente
+// 'Cassure 2 bougies' : clôture au-delà des extrêmes des 2 dernières bougies
+engulfCond  = bodyHigh >= math.max(open[1], close[1]) and bodyLow <= math.min(open[1], close[1])
+break2Long  = close > math.max(high[1], high[2])
+break2Short = close < math.min(low[1], low[2])
+revOkLong   = revConfirm == 'Aucune' or (revConfirm == 'Engulfante' ? engulfCond : break2Long)
+revOkShort  = revConfirm == 'Aucune' or (revConfirm == 'Engulfante' ? engulfCond : break2Short)
+
+// Fix B : RR calculé sur le risque réel jusqu'au stop structurel
+// (fallback : filtre sp original quand le stop structurel est désactivé)
+riskLongNow  = math.min(math.max(close - structStopLongLvl,  minStopPts), maxStopPts)
+riskShortNow = math.min(math.max(structStopShortLvl - close, minStopPts), maxStopPts)
+rrLongOk  = useStructStop ? (openValue - close) >= riskLongNow  * minRR : (openValue - close) >= sp
+rrShortOk = useStructStop ? (close - openValue) >= riskShortNow * minRR : (close - openValue) >= sp
+
+// ─── TJR : entrées — confirmation acceptée jusqu'à armBars bougies après le fill ─
+bool entered = false
+wickOkLong  = not (highWickSize > bodySize * 0.4)
+wickOkShort = not (lowWickSize > bodySize * 0.4)
+
+// Continuation long
+if armOk(armContLongBar) and not entered and strategy.position_size == 0 and continuePeriod
+ and entriesWindow < maxEntriesWin
+ and refDirLongOk
+ and tradeTime and candleBuy and wickOkLong and close > high[1] and structLongOk
+    strategy.entry("Long", strategy.long, qty = 10)
+    if swingTimeUSA
+        tradeType := "continue"
+    else if lastPeriod < close
+        tradeType := "continue"
+    else
+        tradeType := "crossContinue"
+    label.new(bar_index, high, text=tradeType)
+    armContLongBar := na
+    entered := true
+    entriesWindow += 1
+
+// Continuation short
+if armOk(armContShortBar) and not entered and strategy.position_size == 0 and continuePeriod
+ and entriesWindow < maxEntriesWin
+ and refDirShortOk
+ and tradeTime and candleSell and wickOkShort and close < low[1] and structShortOk
+    strategy.entry("Short", strategy.short, qty = 10)
+    if swingTimeUSA
+        tradeType := "continue"
+    else if lastPeriod > close
+        tradeType := "continue"
+    else
+        tradeType := "crossContinue"
+    label.new(bar_index, high, text=tradeType)
+    armContShortBar := na
+    entered := true
+    entriesWindow += 1
+
+// ─── Reverse trade long : cible = zone FP, filtre RR structurel ──────────────
+if armOk(armRevLongBar) and not entered and strategy.position_size == 0
+ and entriesWindow < maxEntriesWin
+ and longTime
+ and candleBuy
+ and canTrade
+ and volCond
+ and not tooMuchWick
+ and not muchSell
+ and atrFilter
+ and close > high[1]
+ and revOkLong
+ and rrLongOk
+ and structLongOk
+    strategy.entry("Long", strategy.long, qty = 10)
+    if swingTimeUSA
+        tradeType := "simple"
+    else if lastPeriod < close
+        tradeType := "simple"
+    else
+        tradeType := "crossSimple"
+    label.new(bar_index, high, text=tradeType)
+    armRevLongBar := na
+    entered := true
+    entriesWindow += 1
+
+// ─── Reverse trade short : cible = zone FP, filtre RR structurel ─────────────
+if armOk(armRevShortBar) and not entered and strategy.position_size == 0
+ and entriesWindow < maxEntriesWin
+ and shortTime
+ and candleSell
+ and canTrade
+ and volCond
+ and not tooMuchWick
+ and not muchBuy
+ and atrFilter
+ and close < low[1]
+ and revOkShort
+ and rrShortOk
+ and structShortOk
+    strategy.entry("Short", strategy.short, qty = 10)
+    if swingTimeUSA
+        tradeType := "simple"
+    else if lastPeriod > close
+        tradeType := "simple"
+    else
+        tradeType := "crossSimple"
+    label.new(bar_index, high, text=tradeType)
+    armRevShortBar := na
+    entered := true
+    entriesWindow += 1
+
+// ─── Re-entrée allégée après SL : bougie + cassure + position FP uniquement ──
+// La thèse a déjà été validée à la première entrée : on ne ré-exige ni volume,
+// ni wick, ni ATR, ni RR — seulement la confirmation directionnelle.
+if liteReentry and reEnterAfterLoss and liteArmOk(rearmLongBar) and not entered
+ and strategy.position_size == 0
+ and entriesWindow < maxEntriesWin
+ and longTime
+ and candleBuy
+ and canTrade
+ and close > high[1]
+ and structLongOk
+    strategy.entry("Long", strategy.long, qty = 10)
+    if swingTimeUSA
+        tradeType := "simple"
+    else if lastPeriod < close
+        tradeType := "simple"
+    else
+        tradeType := "crossSimple"
+    label.new(bar_index, high, text="reentry " + tradeType)
+    rearmLongBar := na
+    entered := true
+    entriesWindow += 1
+
+if liteReentry and reEnterAfterLoss and liteArmOk(rearmShortBar) and not entered
+ and strategy.position_size == 0
+ and entriesWindow < maxEntriesWin
+ and shortTime
+ and candleSell
+ and canTrade
+ and close < low[1]
+ and structShortOk
+    strategy.entry("Short", strategy.short, qty = 10)
+    if swingTimeUSA
+        tradeType := "simple"
+    else if lastPeriod > close
+        tradeType := "simple"
+    else
+        tradeType := "crossSimple"
+    label.new(bar_index, high, text="reentry " + tradeType)
+    rearmShortBar := na
+    entered := true
+    entriesWindow += 1
+
+// ─── Debug re-entrées : compteurs d'échec par filtre pendant le ré-armement ──
+var int dbgLbars = 0
+var int dbgSbars = 0
+var int[] dbgL = array.new_int(10, 0)
+var int[] dbgS = array.new_int(10, 0)
+
+dbgCount(arr, idx, ok) =>
+    if not ok
+        array.set(arr, idx, array.get(arr, idx) + 1)
+
+if debugRearm and not na(rearmLongBar) and bar_index - rearmLongBar <= reArmBars and strategy.position_size == 0
+    dbgLbars += 1
+    dbgCount(dbgL, 0, longTime)
+    dbgCount(dbgL, 1, candleBuy)
+    dbgCount(dbgL, 2, close > high[1])
+    dbgCount(dbgL, 3, volCond)
+    dbgCount(dbgL, 4, not tooMuchWick)
+    dbgCount(dbgL, 5, not muchSell)
+    dbgCount(dbgL, 6, atrFilter)
+    dbgCount(dbgL, 7, rrLongOk)
+    dbgCount(dbgL, 8, canTrade)
+    dbgCount(dbgL, 9, structLongOk)
+
+if debugRearm and not na(rearmShortBar) and bar_index - rearmShortBar <= reArmBars and strategy.position_size == 0
+    dbgSbars += 1
+    dbgCount(dbgS, 0, shortTime)
+    dbgCount(dbgS, 1, candleSell)
+    dbgCount(dbgS, 2, close < low[1])
+    dbgCount(dbgS, 3, volCond)
+    dbgCount(dbgS, 4, not tooMuchWick)
+    dbgCount(dbgS, 5, not muchBuy)
+    dbgCount(dbgS, 6, atrFilter)
+    dbgCount(dbgS, 7, rrShortOk)
+    dbgCount(dbgS, 8, canTrade)
+    dbgCount(dbgS, 9, structShortOk)
+
+var table dbgTbl = na
+if debugRearm and barstate.islast
+    dbgTbl := table.new(position.bottom_right, 3, 11, bgcolor=color.new(color.black, 20), border_width=1, border_color=color.gray)
+    dbgNames = array.from("fenetre", "bougie", "cassure", "volume", "wick", "tend30m", "atrExp", "RR", "canTrade", "struct")
+    table.cell(dbgTbl, 0, 0, "Echecs re-entree", text_color=color.white, text_size=size.small)
+    table.cell(dbgTbl, 1, 0, "L /" + str.tostring(dbgLbars), text_color=color.white, text_size=size.small)
+    table.cell(dbgTbl, 2, 0, "S /" + str.tostring(dbgSbars), text_color=color.white, text_size=size.small)
+    for i = 0 to 9
+        table.cell(dbgTbl, 0, i + 1, array.get(dbgNames, i), text_color=color.white, text_size=size.small)
+        table.cell(dbgTbl, 1, i + 1, str.tostring(array.get(dbgL, i)), text_color=color.white, text_size=size.small)
+        table.cell(dbgTbl, 2, i + 1, str.tostring(array.get(dbgS, i)), text_color=color.white, text_size=size.small)
+
+// ─── Nettoyage si tableaux trop grands ───────────────────────────────────────
+trimArray(boxes, lines) =>
+    while array.size(boxes) >= 500
+        b  = array.get(boxes, 0)
+        ln = array.get(lines, 0)
+        box.delete(b)
+        line.delete(ln)
+        array.remove(boxes, 0)
+        array.remove(lines, 0)
+
+trimArray(levelBoxes1, levelLines1)
+trimArray(levelBoxes2, levelLines2)
+
+// ─── Bulles ───────────────────────────────────────────────────────────────────
+plotshape(tradeTime and showhighs and showBubbles and h1 ? high[swingSizeR1] : na,
+     style    = shape.circle,
+     location = location.absolute,
+     offset   = -swingSizeR1,
+     color    = sellcolB,
+     size     = size.tiny)
+
+plotshape(tradeTime and showlows and showBubbles and l1 ? low[swingSizeR1] : na,
+     style    = shape.circle,
+     location = location.absolute,
+     offset   = -swingSizeR1,
+     color    = buycolB,
+     size     = size.tiny)
+
+plotshape(h2 ? high[swingSizeR2] : na,
+     location = location.absolute,
+     offset   = -swingSizeR2,
+     style    = shape.circle,
+     color    = color.orange)
+
+plotshape(l2 ? low[swingSizeR2] : na,
+     location = location.absolute,
+     offset   = -swingSizeR2,
+     style    = shape.circle,
+     color    = color.blue)
+
+
+// ─── Gestion SL/TP selon le type de trade ────────────────────────────────────
+
+// Fix A : distance de stop structurelle bornée [min, max], sinon sp ATR
+longStopDist(ep) =>
+    useStructStop ? math.min(math.max(ep - structStopLongLvl, minStopPts), maxStopPts) : sp
+
+shortStopDist(ep) =>
+    useStructStop ? math.min(math.max(structStopShortLvl - ep, minStopPts), maxStopPts) : sp
+
+// Continuation : SL structurel (ou ATR), TP ATR standard, une seule entrée par session
+if tradeType == "continue"
+    if strategy.position_size > 0 and na(entry_price)
+        entry_price := strategy.position_avg_price
+        stop_price := entry_price - longStopDist(entry_price)
+        tp_price := entry_price + tp
+        beTarget := entry_price + (entry_price - stop_price)
+        continuePeriod := false
+
+    if strategy.position_size < 0 and na(entry_price)
+        entry_price := strategy.position_avg_price
+        stop_price := entry_price + shortStopDist(entry_price)
+        tp_price := entry_price - tp
+        beTarget := entry_price - (stop_price - entry_price)
+        continuePeriod := false
+
+// Reverse trade : cible = bord proche de la zone FP (bougie de référence)
+// tpNearEdge : garantit la sortie au premier contact de la zone — openValue
+// peut être le bord opposé selon le sens de la bougie de référence
+if tradeType == "simple"
+    if strategy.position_size > 0 and na(entry_price)
+        entry_price := strategy.position_avg_price
+        stop_price := entry_price - longStopDist(entry_price)
+        tp_price := tpNearEdge ? zoneLow : openValue
+
+    if strategy.position_size < 0 and na(entry_price)
+        entry_price := strategy.position_avg_price
+        stop_price := entry_price + shortStopDist(entry_price)
+        tp_price := tpNearEdge ? zoneHigh : openValue
+
+if tradeType == "crossContinue"
+    if strategy.position_size != 0 and na(minAtrUp) and na(minAtrDown) and continuePeriod
+        minAtrUp := x
+        minAtrDown := x2
+        avgP = strategy.position_avg_price
+        beTarget := strategy.position_size > 0 ? avgP + (avgP - minAtrDown) : avgP - (minAtrUp - avgP)
+        continuePeriod := false
+
+    if not na(x) and not na(minAtrUp)
+        minAtrUp := minAtrUp > x ? x : minAtrUp
+    if not na(x2) and not na(minAtrDown)
+        minAtrDown := minAtrDown < x2 ? x2 : minAtrDown
+
+    tp_price := lastPeriod
+
+    if strategy.position_size > 0
+        stop_price := minAtrDown
+
+    if strategy.position_size < 0
+        stop_price := minAtrUp
+
+
+if tradeType == "crossSimple"
+    if strategy.position_size != 0 and na(minAtrUp) and na(minAtrDown)
+        minAtrUp := x
+        minAtrDown := x2
+
+    if not na(x) and not na(minAtrUp)
+        minAtrUp := minAtrUp > x ? x : minAtrUp
+
+    if not na(x2) and not na(minAtrDown)
+        minAtrDown := minAtrDown < x2 ? x2 : minAtrDown
+
+    tp_price := lastPeriod
+
+    if strategy.position_size > 0
+        stop_price := minAtrDown
+
+    if strategy.position_size < 0
+        stop_price := minAtrUp
+
+// ─── Break-even à 1R : continuations uniquement ──────────────────────────────
+// Une fois l'excursion favorable >= 1R, le stop remonte au prix d'entrée
+// (ex. 24/06 02h08 : +14 950 $ de favorable excursion finie à -10 100 $)
+if useBE and not beArmed and not na(beTarget) and (tradeType == "continue" or tradeType == "crossContinue") and strategy.position_size != 0
+    if strategy.position_size > 0 and high >= beTarget
+        beArmed := true
+    if strategy.position_size < 0 and low <= beTarget
+        beArmed := true
+
+if beArmed and strategy.position_size > 0
+    stop_price := na(stop_price) ? strategy.position_avg_price : math.max(stop_price, strategy.position_avg_price)
+if beArmed and strategy.position_size < 0
+    stop_price := na(stop_price) ? strategy.position_avg_price : math.min(stop_price, strategy.position_avg_price)
+
+
+strategy.exit("SL/TP LONG", from_entry="Long", stop=stop_price, limit=tp_price)
+
+strategy.exit("SL/TP Short", from_entry="Short", stop=stop_price, limit=tp_price)
+
+highFP = math.max(openValue, closeValue)
+lowFP = math.min(openValue, closeValue)
+closeInFP = close > lowFP and close < highFP
+openOutFP = not (open > lowFP and open < highFP)
+fairPriceCond = closeInFP and openOutFP
+
+if fairPriceCond
+    strategy.close_all("Fair price reached")
+
+if conditionStart
+    myLineClose := line.new(
+         x1 = bar_index,
+         y1 = close,
+         x2 = bar_index,
+         y2 = close,
+         color = color.green,
+         width = 2
+     )
+
+    myLineOpen := line.new(
+         x1 = bar_index,
+         y1 = open,
+         x2 = bar_index,
+         y2 = open,
+         color = color.green,
+         width = 2
+     )
+
+
+
+if not na(myLineClose) and tradeTime
+    line.set_x2(myLineClose, bar_index)
+
+if not na(myLineOpen) and tradeTime
+    line.set_x2(myLineOpen, bar_index)
