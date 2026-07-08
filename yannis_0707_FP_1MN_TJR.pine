@@ -390,8 +390,9 @@ tpNearEdge   = input.bool(true, 'Réversion : TP au bord proche de la zone FP', 
 useBE        = input.bool(true, 'Continuation : break-even à 1R', group='TJR')
 // 4. Filtre volatilité : l'expansion ATR(14) vs il y a 20 bougies est en retard
 //    par construction (ex. 30/06 : signal 16h46 refusé, entrée décalée à 16h53
-//    14 points plus bas). 'TR bougie > ATR' valide sur la bougie signal même.
-atrMode      = input.string('Expansion 20 bougies', 'Filtre volatilité (ATR)', options=['Expansion 20 bougies', 'Expansion 10 bougies', 'TR bougie > ATR', 'Expansion 20 OU TR > ATR', 'Désactivé'], group='TJR')
+//    14 points plus bas). Défaut 'TR bougie > ATR' : valide l'expansion sur la
+//    bougie signal même (A/B 28/06-08/07 : +75 300/PF 1,82 vs +36 850/1,63)
+atrMode      = input.string('TR bougie > ATR', 'Filtre volatilité (ATR)', options=['Expansion 20 bougies', 'Expansion 10 bougies', 'TR bougie > ATR', 'Expansion 20 OU TR > ATR', 'Désactivé'], group='TJR')
 atrFilter = switch atrMode
     'Expansion 20 bougies'     => atr14 > atr14[20]
     'Expansion 10 bougies'     => atr14 > atr14[10]
