@@ -325,7 +325,9 @@ lastStart = ta.barssince(conditionStart)
 
 
 // 3. Volatilité - éviter les marchés calmes/ranging
-atrFilter = ta.atr(14)> ta.atr(14)[20]  // ATR en expansion
+// (atrFilter est défini plus bas, section TJR : mode sélectionnable)
+atr14 = ta.atr(14)
+trNow = ta.tr(true)
 
 
 length = 5
@@ -386,6 +388,16 @@ tpNearEdge   = input.bool(true, 'Réversion : TP au bord proche de la zone FP', 
 // 3. Continuation : break-even une fois 1R atteint (ex. long 24/06 02h08 :
 //    +14 950 $ d'excursion favorable finie à -10 100 $)
 useBE        = input.bool(true, 'Continuation : break-even à 1R', group='TJR')
+// 4. Filtre volatilité : l'expansion ATR(14) vs il y a 20 bougies est en retard
+//    par construction (ex. 30/06 : signal 16h46 refusé, entrée décalée à 16h53
+//    14 points plus bas). 'TR bougie > ATR' valide sur la bougie signal même.
+atrMode      = input.string('Expansion 20 bougies', 'Filtre volatilité (ATR)', options=['Expansion 20 bougies', 'Expansion 10 bougies', 'TR bougie > ATR', 'Expansion 20 OU TR > ATR', 'Désactivé'], group='TJR')
+atrFilter = switch atrMode
+    'Expansion 20 bougies'     => atr14 > atr14[20]
+    'Expansion 10 bougies'     => atr14 > atr14[10]
+    'TR bougie > ATR'          => trNow > atr14
+    'Expansion 20 OU TR > ATR' => atr14 > atr14[20] or trNow > atr14
+    => true
 
 // ─── TJR lot A/B/C : stop structurel + RR + re-entrées ───────────────────────
 // useStructStop désactivé par défaut : sur le backtest 19/06→07/07 le stop ATR
