@@ -388,6 +388,9 @@ tpNearEdge   = input.bool(true, 'Réversion : TP au bord proche de la zone FP', 
 // 3. Continuation : break-even une fois 1R atteint (ex. long 24/06 02h08 :
 //    +14 950 $ d'excursion favorable finie à -10 100 $)
 useBE        = input.bool(true, 'Continuation : break-even à 1R', group='TJR')
+//    Étendu aux réversions le 08/07 : deux shorts USA (30/06 16h42 run-up
+//    +20 600 $, 06/07 16h53 run-up +16 250 $) finis à -10 100 $ faute de BE
+useBERev     = input.bool(true, 'Réversion : break-even à 1R', group='TJR')
 // 4. Filtre volatilité : l'expansion ATR(14) vs il y a 20 bougies est en retard
 //    par construction (ex. 30/06 : signal 16h46 refusé, entrée décalée à 16h53
 //    14 points plus bas). Défaut 'TR bougie > ATR' : valide l'expansion sur la
@@ -975,11 +978,13 @@ if tradeType == "simple"
         entry_price := strategy.position_avg_price
         stop_price := entry_price - longStopDist(entry_price)
         tp_price := tpNearEdge ? zoneLow : openValue
+        beTarget := entry_price + (entry_price - stop_price)
 
     if strategy.position_size < 0 and na(entry_price)
         entry_price := strategy.position_avg_price
         stop_price := entry_price + shortStopDist(entry_price)
         tp_price := tpNearEdge ? zoneHigh : openValue
+        beTarget := entry_price - (stop_price - entry_price)
 
 if tradeType == "crossContinue"
     if strategy.position_size != 0 and na(minAtrUp) and na(minAtrDown) and continuePeriod
@@ -1007,6 +1012,8 @@ if tradeType == "crossSimple"
     if strategy.position_size != 0 and na(minAtrUp) and na(minAtrDown)
         minAtrUp := x
         minAtrDown := x2
+        avgP = strategy.position_avg_price
+        beTarget := strategy.position_size > 0 ? avgP + (avgP - minAtrDown) : avgP - (minAtrUp - avgP)
 
     if not na(x) and not na(minAtrUp)
         minAtrUp := minAtrUp > x ? x : minAtrUp
@@ -1022,10 +1029,12 @@ if tradeType == "crossSimple"
     if strategy.position_size < 0
         stop_price := minAtrUp
 
-// ─── Break-even à 1R : continuations uniquement ──────────────────────────────
+// ─── Break-even à 1R : continuations (useBE) et réversions (useBERev) ────────
 // Une fois l'excursion favorable >= 1R, le stop remonte au prix d'entrée
-// (ex. 24/06 02h08 : +14 950 $ de favorable excursion finie à -10 100 $)
-if useBE and not beArmed and not na(beTarget) and (tradeType == "continue" or tradeType == "crossContinue") and strategy.position_size != 0
+// (ex. 24/06 02h08 continuation, 30/06 16h42 et 06/07 16h53 réversions :
+// run-ups de +14 950 à +20 600 $ finis à -10 100 $)
+beActive = (tradeType == "continue" or tradeType == "crossContinue") ? useBE : useBERev
+if beActive and not beArmed and not na(beTarget) and strategy.position_size != 0
     if strategy.position_size > 0 and high >= beTarget
         beArmed := true
     if strategy.position_size < 0 and low <= beTarget
