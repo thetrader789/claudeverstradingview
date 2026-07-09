@@ -381,21 +381,23 @@ useRefDir  = input.bool(true, 'Continuation : suivre le sens de la bougie de ré
 //    'Cassure 2 bougies' = clôture au-delà des extrêmes des 2 dernières bougies
 //    (variante assouplie qui rejette le break 1-bougie sans jeter le reste)
 revConfirm   = input.string('Cassure 2 bougies', 'Réversion : confirmation requise', options=['Aucune', 'Engulfante', 'Cassure 2 bougies'], group='TJR')
-// 2. Réversion : TP au bord PROCHE de la zone FP — openValue peut être le bord
-//    opposé selon le sens de la bougie de référence (ex. short 23/06 16h40 resté
-//    ouvert jusqu'à 20h40 au lieu de clôturer au premier contact de la zone)
-tpNearEdge   = input.bool(true, 'Réversion : TP au bord proche de la zone FP', group='TJR')
+// 2. Réversion : cible du take-profit —
+//    'Bord proche zone FP' : premier contact de la zone (corrige le short 23/06
+//    16h40 resté ouvert jusqu'à 20h40 sur le bord opposé) ;
+//    'openValue (original)' : comportement historique ;
+//    '1,5 ATR' : entrée ± 1,5 x ATR5 (sécurise vite, ne vise plus le FP)
+revTP        = input.string('Bord proche zone FP', 'Réversion : take-profit', options=['Bord proche zone FP', 'openValue (original)', '1,5 ATR'], group='Gestion trade : BE / TP / ATR')
 // 3. Continuation : break-even une fois 1R atteint (ex. long 24/06 02h08 :
 //    +14 950 $ d'excursion favorable finie à -10 100 $)
-useBE        = input.bool(true, 'Continuation : break-even à 1R', group='TJR')
+useBE        = input.bool(true, 'Continuation : break-even à 1R', group='Gestion trade : BE / TP / ATR')
 //    Étendu aux réversions le 08/07 : deux shorts USA (30/06 16h42 run-up
 //    +20 600 $, 06/07 16h53 run-up +16 250 $) finis à -10 100 $ faute de BE
-useBERev     = input.bool(true, 'Réversion : break-even à 1R', group='TJR')
+useBERev     = input.bool(true, 'Réversion : break-even à 1R', group='Gestion trade : BE / TP / ATR')
 // 4. Filtre volatilité : l'expansion ATR(14) vs il y a 20 bougies est en retard
 //    par construction (ex. 30/06 : signal 16h46 refusé, entrée décalée à 16h53
 //    14 points plus bas). Défaut 'TR bougie > ATR' : valide l'expansion sur la
 //    bougie signal même (A/B 28/06-08/07 : +75 300/PF 1,82 vs +36 850/1,63)
-atrMode      = input.string('TR bougie > ATR', 'Filtre volatilité (ATR)', options=['Expansion 20 bougies', 'Expansion 10 bougies', 'TR bougie > ATR', 'Expansion 20 OU TR > ATR', 'Désactivé'], group='TJR')
+atrMode      = input.string('TR bougie > ATR', 'Filtre volatilité (ATR)', options=['Expansion 20 bougies', 'Expansion 10 bougies', 'TR bougie > ATR', 'Expansion 20 OU TR > ATR', 'Désactivé'], group='Gestion trade : BE / TP / ATR')
 atrFilter = switch atrMode
     'Expansion 20 bougies'     => atr14 > atr14[20]
     'Expansion 10 bougies'     => atr14 > atr14[10]
@@ -970,20 +972,19 @@ if tradeType == "continue"
         beTarget := entry_price - (stop_price - entry_price)
         continuePeriod := false
 
-// Reverse trade : cible = bord proche de la zone FP (bougie de référence)
-// tpNearEdge : garantit la sortie au premier contact de la zone — openValue
-// peut être le bord opposé selon le sens de la bougie de référence
+// Reverse trade : cible selon revTP — bord proche de la zone FP (défaut),
+// openValue historique, ou 1,5 x ATR5 depuis l'entrée (variable a)
 if tradeType == "simple"
     if strategy.position_size > 0 and na(entry_price)
         entry_price := strategy.position_avg_price
         stop_price := entry_price - longStopDist(entry_price)
-        tp_price := tpNearEdge ? zoneLow : openValue
+        tp_price := revTP == '1,5 ATR' ? entry_price + a : revTP == 'Bord proche zone FP' ? zoneLow : openValue
         beTarget := entry_price + (entry_price - stop_price)
 
     if strategy.position_size < 0 and na(entry_price)
         entry_price := strategy.position_avg_price
         stop_price := entry_price + shortStopDist(entry_price)
-        tp_price := tpNearEdge ? zoneHigh : openValue
+        tp_price := revTP == '1,5 ATR' ? entry_price - a : revTP == 'Bord proche zone FP' ? zoneHigh : openValue
         beTarget := entry_price - (stop_price - entry_price)
 
 if tradeType == "crossContinue"
