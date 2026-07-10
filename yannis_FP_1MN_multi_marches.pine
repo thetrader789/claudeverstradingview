@@ -15,20 +15,23 @@ qtyIn  = input.int(10, 'Contrats par trade', minval=1, group='Marché')
 
 // Mode Personnalisé : sessions en heure de Paris — la bougie de référence est
 // la minute AVANT l'ouverture (ex. 15:29 pour une ouverture à 15h30)
+pSAon = input.bool(true, '', group='Marché — Personnalisé', inline='pA')
 pSAH = input.int(15, 'Session principale  h', minval=0, maxval=23, group='Marché — Personnalisé', inline='pA')
 pSAM = input.int(29, 'min', minval=0, maxval=59, group='Marché — Personnalisé', inline='pA')
+pSBon = input.bool(true, '', group='Marché — Personnalisé', inline='pB')
 pSBH = input.int(0,  'Réouverture nuit    h', minval=0, maxval=23, group='Marché — Personnalisé', inline='pB')
 pSBM = input.int(0,  'min', minval=0, maxval=59, group='Marché — Personnalisé', inline='pB')
+pSCon = input.bool(true, '', group='Marché — Personnalisé', inline='pC')
 pSCH = input.int(1,  'Session asiatique   h', minval=0, maxval=23, group='Marché — Personnalisé', inline='pC')
 pSCM = input.int(59, 'min', minval=0, maxval=59, group='Marché — Personnalisé', inline='pC')
+pSDon = input.bool(true, '', group='Marché — Personnalisé', inline='pD')
 pSDH = input.int(8,  'Session Londres     h', minval=0, maxval=23, group='Marché — Personnalisé', inline='pD')
 pSDM = input.int(59, 'min', minval=0, maxval=59, group='Marché — Personnalisé', inline='pD')
 pHebOn  = input.bool(false, 'News hebdo récurrente', group='Marché — Personnalisé', inline='pH')
 pHebDay = input.string('Mercredi', '', options=['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi'], group='Marché — Personnalisé', inline='pH')
 pHebH = input.int(16, 'News hebdo          h', minval=0, maxval=23, group='Marché — Personnalisé', inline='pH2')
 pHebM = input.int(29, 'min', minval=0, maxval=59, group='Marché — Personnalisé', inline='pH2')
-pMinStop = input.float(16.5, 'Stop minimum (points)', minval=0, group='Marché — Personnalisé')
-pMaxStop = input.float(50.0, 'Stop maximum (points)', minval=0, group='Marché — Personnalisé')
+pK = input.float(1.0, 'Échelle volatilité vs NQ (k)', minval=0.000001, step=0.05, group='Marché — Personnalisé')
 
 pHebDow = switch pHebDay
     'Lundi'    => dayofweek.monday
@@ -64,6 +67,15 @@ mktEff = marche != 'Auto (symbole)' ? marche :
     'Personnalisé'     => [pSAH, pSAM, pSBH, pSBM, pSCH, pSCM, pSDH, pSDM]
     => [15, 29, 0, 0, 1, 59, 8, 59]
 
+// Activation des slots par marché : CL/NG n'ont pas de session asiatique
+// exploitable (02h00-03h30 Paris quasi sans volume sur l'énergie — retour
+// utilisateur 09/07 : 10 perdants sur 11 trades dans cette fenêtre sur CL)
+[sAon, sBon, sCon, sDon] = switch mktEff
+    'CL (pétrole WTI)' => [true, true, false, true]
+    'NG (gaz naturel)' => [true, true, false, true]
+    'Personnalisé'     => [pSAon, pSBon, pSCon, pSDon]
+    => [true, true, true, true]
+
 // News hebdomadaire récurrente (heure de Paris, bougie réf 1 min avant) :
 // CL : stocks pétrole EIA, mercredi 16h30 (10h30 ET)
 // NG : stocks gaz EIA, jeudi 16h30 (10h30 ET)
@@ -73,16 +85,20 @@ mktEff = marche != 'Auto (symbole)' ? marche :
     'Personnalisé'     => [pHebOn, pHebDow, pHebH, pHebM]
     => [false, dayofweek.wednesday, 16, 29]
 
-// Échelle des stops par marché (points) : bornes du stop 2,5 x ATR5
-// (remplace les paliers en points fixes du script NQ, propres au Nasdaq)
-[minStopMkt, maxStopMkt] = switch mktEff
-    'GC (or)'          => [1.5, 6.0]
-    'SI (argent)'      => [0.04, 0.25]
-    'CL (pétrole WTI)' => [0.06, 0.4]
-    'NG (gaz naturel)' => [0.012, 0.08]
-    'FDAX (DAX)'       => [8.0, 60.0]
-    'Personnalisé'     => [pMinStop, pMaxStop]
-    => [16.5, 50.0]
+// Échelle de volatilité vs NQ (k) : médiane du true range 1 mn mesurée sur
+// 6 jours (03-09/07/2026), rapportée au NQ (11,75 pts). Tous les seuils en
+// points du script NQ (paliers SL/TP, seuils ATR5 7/20, buffer FP 20 pts,
+// stop structurel 2/10/50) sont multipliés par k : le comportement de base
+// du NQ est reproduit à l'échelle de chaque marché.
+// Médianes mesurées : GC 1,70 | SI 0,045 | CL 0,05 | NG 0,002 | FDAX 7,0
+kMkt = switch mktEff
+    'GC (or)'          => 0.15
+    'SI (argent)'      => 0.004
+    'CL (pétrole WTI)' => 0.0045
+    'NG (gaz naturel)' => 0.00018
+    'FDAX (DAX)'       => 0.6
+    'Personnalisé'     => pK
+    => 1.0
 
 
 newsDays = input.string(
@@ -183,11 +199,17 @@ a = ta.rma(ta.tr(true), length) * m
 x = ta.rma(ta.tr(true), length) * m + src1
 x2 = src2 - ta.rma(ta.tr(true), length) * m
 
-// Stop ATR : 2,5 x ATR5 borné par l'échelle du marché. Reproduit l'esprit des
-// paliers NQ (16,5 / 25 / 50 points) tout en restant transposable sur GC, SI,
-// CL, NG, FDAX dont les points n'ont pas la même valeur
-sp := math.min(math.max(2.5 * atr5, minStopMkt), maxStopMkt)
-tp := 1.5 * sp
+// Paliers SL/TP de base du NQ (16,5/25/50 -> 24,75/38,5/75, seuils ATR5 7/20)
+// multipliés par l'échelle de volatilité k du marché
+if atr5 >= 20 * kMkt
+    sp := 50 * kMkt
+    tp := 75 * kMkt
+else if atr5 < 7 * kMkt
+    sp := 16.5 * kMkt
+    tp := 24.75 * kMkt
+else
+    sp := 25 * kMkt
+    tp := 38.5 * kMkt
 
 bodyHigh = math.max(open, close)
 bodyLow = math.min(open, close)
@@ -263,10 +285,10 @@ inRange(startMin, offsetStart, offsetEnd) =>
 // Slots génériques pilotés par le préréglage marché (voir tableau en tête) :
 // startUSA = slot A (principale), startMidnight = slot B (réouverture nuit),
 // startJapan = slot C (Asie), startLondon = slot D (Londres)
-startUSA      = toMinutes(sAH, sAM)
-startMidnight = toMinutes(sBH, sBM)
-startJapan    = toMinutes(sCH, sCM)
-startLondon   = toMinutes(sDH, sDM)
+startUSA      = sAon ? toMinutes(sAH, sAM) : na
+startMidnight = sBon ? toMinutes(sBH, sBM) : na
+startJapan    = sCon ? toMinutes(sCH, sCM) : na
+startLondon   = sDon ? toMinutes(sDH, sDM) : na
 
 startNews1430 = isNews1430Today ? toMinutes(14, 29) : na
 startNews2000 = isNews2000Today ? toMinutes(19, 59) : na
@@ -277,20 +299,20 @@ startNewsHebdo = hebOn and dowCET == hebDow ? toMinutes(hebH, hebM) : na
 // ======================
 
 conditionStart =
-     inRange(startUSA, 0, 0) or
-     inRange(startMidnight, 0, 0) or
-     inRange(startJapan, 0, 0) or
-     inRange(startLondon, 0, 0) or
+     (not na(startUSA) and inRange(startUSA, 0, 0)) or
+     (not na(startMidnight) and inRange(startMidnight, 0, 0)) or
+     (not na(startJapan) and inRange(startJapan, 0, 0)) or
+     (not na(startLondon) and inRange(startLondon, 0, 0)) or
      (not na(startNews1430) and inRange(startNews1430, 0, 0)) or
      (not na(startNews2000) and inRange(startNews2000, 0, 0)) or
      (not na(startNewsHebdo) and inRange(startNewsHebdo, 0, 0))
 
 
 
-tradeTimeUSA = inRange(startUSA, 1, 90)
-tradeTimeMidnight = inRange(startMidnight, 0, 89)
-tradeTimeJapan = inRange(startJapan, 1, 90)
-tradeTimeLondon = inRange(startLondon, 1, 90)
+tradeTimeUSA = not na(startUSA) and inRange(startUSA, 1, 90)
+tradeTimeMidnight = not na(startMidnight) and inRange(startMidnight, 0, 89)
+tradeTimeJapan = not na(startJapan) and inRange(startJapan, 1, 90)
+tradeTimeLondon = not na(startLondon) and inRange(startLondon, 1, 90)
 tradeTimeNews1430 = (not na(startNews1430) and inRange(startNews1430, 1, 60))
 tradeTimeNews2000 = (not na(startNews2000) and inRange(startNews2000, 1, 90))
 tradeTimeNewsHebdo = (not na(startNewsHebdo) and inRange(startNewsHebdo, 1, 60))
@@ -310,10 +332,10 @@ tradeTime =
      or
      tradeTimeNewsHebdo
 
-swingTimeUSA = inRange(startUSA, -59, 90)
-swingTimeMidnight = inRange(startMidnight, -60, 89)
-swingTimeJapan = inRange(startJapan, -59, 90)
-swingTimeLondon = inRange(startLondon, -59, 90)
+swingTimeUSA = not na(startUSA) and inRange(startUSA, -59, 90)
+swingTimeMidnight = not na(startMidnight) and inRange(startMidnight, -60, 89)
+swingTimeJapan = not na(startJapan) and inRange(startJapan, -59, 90)
+swingTimeLondon = not na(startLondon) and inRange(startLondon, -59, 90)
 swingTimeNews1430 = (not na(startNews1430) and inRange(startNews1430, -59, 60))
 swingTimeNews2000 = (not na(startNews2000) and inRange(startNews2000, -59, 90))
 swingTimeNewsHebdo = (not na(startNewsHebdo) and inRange(startNewsHebdo, -59, 60))
@@ -392,9 +414,8 @@ zoneLow = math.min(openValue, closeValue)
 refBull = closeValue > openValue
 refBear = openValue > closeValue
 
-// Buffer de proximité de la zone FP : ATR-relatif (remplace les 20 points
-// fixes du script NQ, sans signification sur CL/NG/SI)
-buffer = a
+// Buffer de proximité de la zone FP : 20 points NQ mis à l'échelle du marché
+buffer = 20 * kMkt
 
 longTime = tradeTime and high < closeValue
 shortTime = tradeTime and low > closeValue
@@ -491,6 +512,11 @@ useBERev     = input.bool(true, 'Réversion : break-even à 1R', group='Gestion 
 //    14 points plus bas). Défaut 'TR bougie > ATR' : valide l'expansion sur la
 //    bougie signal même (A/B 28/06-08/07 : +75 300/PF 1,82 vs +36 850/1,63)
 atrMode      = input.string('TR bougie > ATR', 'Filtre volatilité (ATR)', options=['Expansion 20 bougies', 'Expansion 10 bougies', 'TR bougie > ATR', 'Expansion 20 OU TR > ATR', 'Désactivé'], group='Gestion trade : BE / TP / ATR')
+// 5. Clôture au profit fixe : sortie en limite dès que le gain latent du trade
+//    atteint le montant choisi (en $ par trade, tous contrats confondus, hors
+//    frais). Ne remplace le TP normal que s'il est plus proche que lui.
+useProfitClose = input.bool(false, 'Clôture au profit fixe', group='Gestion trade : BE / TP / ATR')
+profitCloseUsd = input.float(5000, 'Seuil de profit ($ par trade)', minval=100, step=100, group='Gestion trade : BE / TP / ATR')
 atrFilter = switch atrMode
     'Expansion 20 bougies'     => atr14 > atr14[20]
     'Expansion 10 bougies'     => atr14 > atr14[10]
@@ -503,11 +529,11 @@ atrFilter = switch atrMode
 // par paliers reste meilleur (PF 1,74 vs 1,66, DD 40 350 vs 45 350)
 useStructStop    = input.bool(false, 'Stop structurel (au-delà du swing)', group='TJR')
 stopLookback     = input.int(12, 'Lookback du stop (bougies)', minval=2, group='TJR')
-// Buffer et bornes du stop structurel : ATR-relatifs / échelle marché
-// (remplacent les inputs en points fixes du script NQ : 2 / 10 / 50 points)
-structBuffer     = 0.1 * a
-minStopPts       = minStopMkt
-maxStopPts       = maxStopMkt
+// Buffer et bornes du stop structurel : valeurs NQ (2 / 10 / 50 points)
+// mises à l'échelle de volatilité k du marché
+structBuffer     = 2.0 * kMkt
+minStopPts       = 10.0 * kMkt
+maxStopPts       = 50.0 * kMkt
 minRR            = input.float(1.0, 'RR minimum vers le fair price', minval=0, step=0.25, group='TJR')
 maxEntriesWin    = input.int(3, 'Entrées max par fenêtre', minval=1, group='TJR')
 reEnterAfterLoss = input.bool(true, 'Re-entrée après SL (thèse intacte)', group='TJR')
@@ -1141,6 +1167,17 @@ if beArmed and strategy.position_size > 0
 if beArmed and strategy.position_size < 0
     stop_price := na(stop_price) ? strategy.position_avg_price : math.min(stop_price, strategy.position_avg_price)
 
+
+// ─── Clôture au profit fixe (useProfitClose) : le TP est ramené au prix où le
+// gain latent atteint profitCloseUsd — ordre limite, exécuté en intrabar
+if useProfitClose and strategy.position_size != 0
+    profitOffset = profitCloseUsd / (syminfo.pointvalue * math.abs(strategy.position_size))
+    if strategy.position_size > 0
+        profitLimL = strategy.position_avg_price + profitOffset
+        tp_price := na(tp_price) ? profitLimL : math.min(tp_price, profitLimL)
+    if strategy.position_size < 0
+        profitLimS = strategy.position_avg_price - profitOffset
+        tp_price := na(tp_price) ? profitLimS : math.max(tp_price, profitLimS)
 
 strategy.exit("SL/TP LONG", from_entry="Long", stop=stop_price, limit=tp_price)
 
