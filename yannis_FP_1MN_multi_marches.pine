@@ -7,6 +7,7 @@ strategy("FP Multi-Marchés 1mn", pyramiding = 0, overlay = true, margin_long = 
 // (points) sont préréglées par marché ; les news hebdomadaires EIA (CL :
 // stocks pétrole mercredi 16h30, NG : stocks gaz jeudi 16h30) créent une
 // bougie de référence fair price dédiée, comme les news 14h30/20h00.
+// Synchronisé le 10/07 : nuit/Asie OFF sur CL et NG + clôture au profit fixe.
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ─── Marché : préréglage sessions + échelle de stops ─────────────────────────
@@ -67,12 +68,12 @@ mktEff = marche != 'Auto (symbole)' ? marche :
     'Personnalisé'     => [pSAH, pSAM, pSBH, pSBM, pSCH, pSCM, pSDH, pSDM]
     => [15, 29, 0, 0, 1, 59, 8, 59]
 
-// Activation des slots par marché : CL/NG n'ont pas de session asiatique
-// exploitable (02h00-03h30 Paris quasi sans volume sur l'énergie — retour
-// utilisateur 09/07 : 10 perdants sur 11 trades dans cette fenêtre sur CL)
+// Activation des slots par marché : sur CL/NG, aucun trade entre 00h00 et
+// 08h00 Paris (retour utilisateur 10/07) — slots nuit (B) et Asie (C) OFF,
+// l'énergie n'a pas de volume exploitable avant Londres
 [sAon, sBon, sCon, sDon] = switch mktEff
-    'CL (pétrole WTI)' => [true, true, false, true]
-    'NG (gaz naturel)' => [true, true, false, true]
+    'CL (pétrole WTI)' => [true, false, false, true]
+    'NG (gaz naturel)' => [true, false, false, true]
     'Personnalisé'     => [pSAon, pSBon, pSCon, pSDon]
     => [true, true, true, true]
 
