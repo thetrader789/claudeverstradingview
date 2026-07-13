@@ -4,21 +4,15 @@ strategy("Opening Range Break Strategy — Asia London", shorttitle="ORBAsiaLdn"
      process_orders_on_close=true, calc_on_every_tick=false, slippage=3, max_boxes_count=500)
 
 // ============================================================================
-// Variante de Opening_Range_Break_Strategy.pine SANS la session New York,
-// pensée pour les indices hors US (Europe : DAX, CAC40, FTSE... / Asie :
-// Nikkei, Hang Seng...) plutôt que NQ/MNQ. Même logique anti fake-breakout
-// (slide 5), même gestion du trade — seules les sessions tradées changent.
-// ============================================================================
-
-// ============================================================================
 // INPUTS — Session / Opening Range
 // ============================================================================
 grpSession = "Session & Opening Range"
 sessionChoice = input.string("Asie + Londres", "Session",
-     options=["Asie + Londres", "Londres seule (09:00-09:30)", "Asie seule (02:00-02:25)", "Personnalisée"],
+     options=["Asie + Londres", "Londres + New York", "Asie + Londres + New York", "Londres seule (09:00-09:30)", "Asie seule (02:00-02:25)", "Personnalisée"],
      group=grpSession,
-     tooltip="Le mode multi-sessions trade les deux opening ranges Asie (02:00-02:25) et Londres (09:00-09:30, heure de Paris) — pas de session New York dans cette variante. Leurs fenêtres de recherche (maxSessionHours) ne se chevauchent jamais : chaque nouvelle session réinitialise le range et les compteurs de session. Les limites journalières (pertes max / stop après gain) restent globales sur la journée. L'OR Asie se ferme à 02:25 (et non 02:30) pour que la première bougie de cassure éligible clôture à 02:30 pile — aucune entrée ne peut être exécutée avant 02:30.")
-customSession = input.session("0900-0930", "Session personnalisée (si 'Personnalisée')", group=grpSession)
+     tooltip="Combos multi-sessions (heure de Paris) : Asie + Londres (02:00-02:25 / 09:00-09:30), Londres + New York (09:00-09:30 / 15:30-15:45) ou Asie + Londres + New York (les trois). Les fenêtres de recherche (maxSessionHours) ne se chevauchent jamais : chaque nouvelle session réinitialise le range et les compteurs de session. Les limites journalières (pertes max / stop après gain) restent globales sur la journée. L'OR Asie se ferme à 02:25 (et non 02:30) pour que la première bougie de cassure éligible clôture à 02:30 pile — aucune entrée ne peut être exécutée avant 02:30.")
+customSession = input.session("0900-0930", "Session personnalisée (si 'Personnalisée')", group=grpSession,
+     tooltip="IMPORTANT : cette plage définit la FENÊTRE DE FORMATION de l'opening range (courte : 15-30 min), PAS une plage de trading. Le breakout se cherche APRÈS la clôture de cette fenêtre, pendant la durée max de recherche. Une plage couvrant la journée (ex. 0000-2345) donne 0 trade : l'OR devient le range de toute la journée et il ne reste aucune bougie hors session pour le casser.")
 sessionTZ = input.string("Europe/Paris", "Fuseau horaire de la session (CET/CEST)", group=grpSession,
      tooltip="Fuseau IANA (pas un offset fixe) : bascule automatiquement CET (hiver, GMT+1) / CEST (été, GMT+2). Un offset fixe type 'GMT+1' se décale d'1h dès qu'on change d'heure. Ce script doit être appliqué sur un graphique en 5 minutes (règle 'clôture 5m hors range').")
 
@@ -31,7 +25,8 @@ useSwingFilter = input.bool(true, "Exiger de la liquidité (swing) au-delà du n
 atrLen = input.int(14, "Période ATR (mesure de proximité)", group=grpInvalid)
 proximityMult = input.float(0.5, "Distance min. requise (x ATR)", group=grpInvalid,
      tooltip="Si le high/low de l'OR est à moins de X x ATR du H/L de la session précédente ET qu'aucun swing significatif ne se trouve au-delà à plus de X x ATR, le trade est invalidé (fake breakout probable).")
-pivotLen = input.int(8, "Longueur pivot (barres de chaque côté)", group=grpInvalid)
+pivotLen = input.int(4, "Longueur pivot (barres de chaque côté)", group=grpInvalid,
+     tooltip="Grille de sensibilité GC 5 min (juil. 2026) : dégradation monotone quand la valeur monte (3 : PF 3,79 ; 4 : PF 2,32 ; 5 : PF 1,65 ; 8 : PF 0,99). Petit = swings denses → cibles proches atteignables + le filtre R:R rejette les signaux médiocres. 4 = compromis fréquence/qualité. Échantillon faible (~1 mois) — à revalider sur NQ et historique plus long.")
 pivotLookback = input.int(300, "Barres de recherche des pivots", group=grpInvalid)
 
 // ============================================================================
@@ -52,61 +47,68 @@ flattenHour = input.int(17, "Heure de flatten (heure de l'EXCHANGE du symbole)",
 flattenMinute = input.int(45, "Minute de flatten", minval=0, maxval=59, group=grpFlatten,
      tooltip="Le flatten est actif de flattenHour:flattenMinute jusqu'à la fin de cette heure-là (ex. 17:45 → fenêtre 17:45-17:59, soit 3 bougies de 5 min avant la clôture — marge si une bougie manque).")
 
-// Déclaré en DERNIER volontairement : ajouter un input au milieu décale les
-// indices in_N et fait réappliquer les valeurs sauvegardées du graphique aux
-// mauvais champs. (Affiché dans le groupe "Gestion du trade" malgré tout.)
 disableLongsAsia = input.bool(false, "Pas de longs sur Asie", group=grpTrade,
      tooltip="Sur NQ/MNQ (variante US), les longs pris sur l'opening range Asie étaient largement perdants (les shorts portaient la performance). À valider séparément sur les indices Europe/Asie avant de l'activer ici. Les longs restent autorisés sur Londres et en session personnalisée.")
 tpProximityTicks = input.int(10, "Tolérance TP (ticks) — clôture proche du swing = sortie", minval=0, group=grpTrade,
      tooltip="Si une bougie CLÔTURE à moins de X ticks du swing cible sans que la limite ait été touchée, on ferme le trade au marché sur cette clôture plutôt que d'exiger le tick exact. 0 = désactivé.")
-dynamicTpFollow = input.bool(false, "TP dynamique (suit les nouveaux swings formés après l'entrée)", group=grpTrade,
-     tooltip="Par défaut le TP est figé au swing le plus proche connu à la bougie de cassure, même s'il est lointain — un trade peut alors courir des heures et chevaucher la session suivante. Activé : à chaque nouveau swing confirmé plus proche dans le sens du trade, la limite est déplacée dessus (elle ne peut que se rapprocher, jamais s'éloigner). Le stop (orMid figé à l'entrée) n'est jamais modifié.")
+dynamicTpFollow = input.bool(true, "TP dynamique (suit les nouveaux swings formés après l'entrée)", group=grpTrade,
+     tooltip="Activé par défaut. Quand un nouveau swing plus proche se confirme pendant le trade, le TP se déplace dessus (ne peut que se rapprocher, jamais s'éloigner). Seuls comptent les swings formés APRÈS la bougie d'entrée et au-delà du prix d'entrée d'au moins la distance min. (x ATR) : un micro-swing qui vient de se faire sur les premières bougies du mouvement (ou qui existait déjà avant l'entrée) n'est pas une cible — le TP initial reste le swing récent établi (ex. GC 18 juin 02:55 : swing haut du 17 juin 20h45, pas le pivot formé à l'entrée). Résout aussi le cas du TP posé sur un swing lointain d'une session précédente (ex. chute du 7-8 avril). Le stop (orMid à l'entrée) n'est jamais modifié.")
+tpPivotLen = input.int(2, "Longueur pivot pour TP dynamique (côtés g/d)", minval=1, maxval=20, group=grpTrade,
+     tooltip="Nombre de barres de confirmation de chaque côté pour les pivots de suivi TP. Valeur plus petite = confirmation plus rapide (2 = 10 min sur 5 min chart). Distinct du pivotLen principal pour rester réactif sans assouplir le filtre d'entrée.")
+useRetestEntry = input.bool(false, "Entrée retest : cassure éloignée → ordre limite sur la ligne cassée", group=grpTrade,
+     tooltip="Quand une cassure valide est REFUSÉE par le filtre R:R (clôture trop loin du niveau par rapport au swing cible, ou aucun swing connu), au lieu d'abandonner le signal on pose un ordre limite sur la ligne cassée (OR High/Low) et on attend le retracement. SL = milieu du range (comme l'entrée marché), TP = 'R:R cible du retest' x R où R = ligne - milieu du range. L'ordre est annulé si la fenêtre de recherche expire, si une nouvelle session démarre, au flatten, ou si une cassure opposée se produit.")
+retestRR = input.float(1.0, "R:R cible du retest", minval=0.5, step=0.5, group=grpTrade,
+     tooltip="TP du trade retest en multiples de R (R = distance ligne cassée → milieu du range). 1.0 = R:R de 1 depuis la ligne de cassure.")
 
 // ============================================================================
 // 1) SESSION & OPENING RANGE
 // ============================================================================
-// Le multi-sessions est le fallback : toute valeur non reconnue (ex. ancienne
-// option sauvegardée sur le graphique avant un renommage) retombe dessus,
-// plutôt que sur la session personnalisée qui masquerait silencieusement le
-// mode demandé. Deux appels time() distincts (pas une session string à
-// virgules, dont le support n'est pas fiable) combinés en OR.
 singleSessionString = sessionChoice == "Personnalisée" ? customSession :
      sessionChoice == "Londres seule (09:00-09:30)" ? "0900-0930" :
      sessionChoice == "Asie seule (02:00-02:25)" ? "0200-0225" : ""
 isMultiSession = singleSessionString == ""
 
-// L'OR Asie ferme à 02:25 (pas 02:30) volontairement : la première bougie
-// "hors session" (donc éligible à une cassure) est celle ouverte à 02:25 et
-// clôturée à 02:30 — avec process_orders_on_close=true, l'entrée la plus
-// précoce possible s'exécute à 02:30 pile, jamais avant.
+// Sessions actives selon le combo choisi. Londres est présente dans tous les
+// combos. Une valeur inconnue (ancienne option sauvegardée sur le graphique)
+// retombe sur Asie + Londres, l'ancien comportement par défaut.
+useAsiaOR = sessionChoice != "Londres + New York"
+useNYOR   = sessionChoice == "Londres + New York" or sessionChoice == "Asie + Londres + New York"
+
 inAsiaOR   = not na(time(timeframe.period, "0200-0225", sessionTZ))
 inLondonOR = not na(time(timeframe.period, "0900-0930", sessionTZ))
+inNYOR     = not na(time(timeframe.period, "1530-1545", sessionTZ))
 inSingleOR = not na(time(timeframe.period, isMultiSession ? "0900-0930" : singleSessionString, sessionTZ))
 
-inSession = isMultiSession ? (inAsiaOR or inLondonOR) : inSingleOR
+inSession = isMultiSession ? ((useAsiaOR and inAsiaOR) or inLondonOR or (useNYOR and inNYOR)) : inSingleOR
 
 var float orHigh = na
 var float orLow  = na
 var int   orBarCount = 0
 var box   orBox = na
 var bool  breakoutDoneToday = false
-// Gestion par session : après une perte, on se redonne une deuxième (et
-// dernière) chance sur le même OR ; après un gain, on arrête cette session.
 var int   sessionTradeCount = 0
 var bool  sessionWinLock    = false
-// Sens autorisé pour le range en cours, figé à l'ouverture de la session
-// (les fenêtres Asie/Londres ne se chevauchent jamais).
 var bool  orLongsAllowed    = true
-// TP du trade en cours (pour la sortie anticipée par proximité de clôture,
-// et pour le TP dynamique qui le rapproche au fil des nouveaux swings).
 var float activeTpPrice     = na
-// SL du trade en cours, figé à l'entrée — nécessaire pour réémettre
-// strategy.exit quand le TP dynamique bouge (les deux valeurs doivent être
-// repassées à chaque appel, sinon l'omise est annulée).
 var float activeSlPrice     = na
+// Barre et prix d'entrée du trade en cours : le TP dynamique n'accepte que
+// des swings formés strictement APRÈS cette barre, au-delà de ce prix dans le
+// sens du trade (cas GC du 18 juin 02:55 : le TP sautait sur un micro-pivot
+// antérieur à l'entrée — voire sous elle, l'ancien code long cherchait
+// au-dessus de orLow — et « TP proximité swing » fermait le trade 2 bougies
+// plus tard à ~2 points, au lieu de viser le swing établi du 17 juin 20h45).
+var int   entryBarIdx       = na
+var float entryPxSaved      = na
+// Ordre retest en attente (cassure éloignée) et position retest active.
+// Niveaux figés à la pose de l'ordre — le TP retest est fixe (retestRR x R),
+// il n'est PAS géré par le TP dynamique.
+var int   pendingRetestDir  = 0     // 0 = aucun, 1 = long, -1 = short
+var float retestLvl         = na
+var float retestSl          = na
+var float retestTp          = na
+var bool  longRetestActive  = false
+var bool  shortRetestActive = false
 
-// "na(orHigh)" couvre le cas limite où la toute première barre chargée à
-// l'écran tombe déjà dans une session (inSession[1] vaut alors na, pas false).
 isNewSessionStart = inSession and (not inSession[1] or na(orHigh))
 
 if inSession
@@ -114,17 +116,10 @@ if inSession
         orHigh := high
         orLow := low
         orBarCount := 1
-        // Réinitialisé ici (au DÉBUT de chaque nouvelle session), pas seulement au
-        // changement de jour calendaire — sinon un range déjà "consommé" pouvait
-        // redevenir éligible après minuit si la fenêtre de recherche (maxSessionHours)
-        // chevauchait le changement de jour (même bug que celui déjà corrigé, mais
-        // côté "attempt flag" plutôt que côté "fenêtre temporelle").
         breakoutDoneToday := false
         sessionTradeCount := 0
         sessionWinLock := false
         orLongsAllowed := not (disableLongsAsia and inAsiaOR)
-        // Nouvelle boîte visuelle, mise à jour en direct à chaque barre de la
-        // session (mèche haute/basse incluse) — on voit l'OR se former en temps réel.
         orBox := box.new(bar_index, high, bar_index, low, border_color=color.new(color.blue, 40),
              bgcolor=color.new(color.blue, 90))
     else
@@ -146,33 +141,55 @@ if sessionJustEnded
     orLocked := true
     sessionEndTime := time
 
-// Fenêtre de validité du breakout : au-delà de maxSessionHours après la clôture
-// de l'OR, on arrête de chercher un trade sur ce range (il devient trop "vieux").
+// Garde-fou : la session est la fenêtre de FORMATION de l'opening range et
+// doit rester courte (l'entrée se fait après sa clôture). Une plage
+// personnalisée couvrant la journée (ex. 0000-2345) produit 0 trade : l'OR
+// couvre tout et il ne reste aucune bougie hors session pour le casser.
+if sessionJustEnded and orBarCount > 12
+    label.new(bar_index, high, "⚠ Fenêtre d'opening range trop longue (" + str.tostring(orBarCount) + " bougies)\nLa session doit être courte (15-30 min) :\nle breakout se cherche APRÈS sa clôture.",
+         style=label.style_label_down, color=color.new(color.red, 10), textcolor=color.white, size=size.small)
+
 withinTradingWindow = not na(sessionEndTime) and (time - sessionEndTime) <= maxSessionHours * 60 * 60 * 1000
 
 // ============================================================================
-// 2) H/L DE LA SESSION PRÉCÉDENTE (proxy : veille, journalier)
+// 2) H/L DE LA SESSION PRÉCÉDENTE
 // ============================================================================
 prevDayHigh = request.security(syminfo.tickerid, "1D", high[1], lookahead=barmerge.lookahead_off)
 prevDayLow  = request.security(syminfo.tickerid, "1D", low[1],  lookahead=barmerge.lookahead_off)
 
 // ============================================================================
-// 3) SWINGS (PIVOTS) — recherche du swing le plus proche au-delà d'un niveau
+// 3) SWINGS — deux séries de pivots :
+//    pivotLen  (=8, lent) → filtre d'entrée + TP initial
+//    tpPivotLen (=2, rapide) → suivi TP dynamique intra-trade
 // ============================================================================
-pivotHighVal = ta.pivothigh(high, pivotLen, pivotLen)
-pivotLowVal  = ta.pivotlow(low, pivotLen, pivotLen)
+pivotHighVal   = ta.pivothigh(high, pivotLen, pivotLen)
+pivotLowVal    = ta.pivotlow(low,  pivotLen, pivotLen)
+tpPivotLowVal  = ta.pivotlow(low,  tpPivotLen, tpPivotLen)
+tpPivotHighVal = ta.pivothigh(high, tpPivotLen, tpPivotLen)
 
-var array<float> pivotHighs     = array.new_float()
-var array<int>   pivotHighBars  = array.new_int()
-var array<float> pivotLows      = array.new_float()
-var array<int>   pivotLowBars   = array.new_int()
+var array<float> pivotHighs    = array.new_float()
+var array<int>   pivotHighBars = array.new_int()
+var array<float> pivotLows     = array.new_float()
+var array<int>   pivotLowBars  = array.new_int()
+
+// Pivot rapides (tpPivotLen) pour TP dynamique uniquement
+var array<float> tpPivotLows  = array.new_float()
+var array<int>   tpPivotLBars = array.new_int()
+var array<float> tpPivotHighs = array.new_float()
+var array<int>   tpPivotHBars = array.new_int()
 
 if not na(pivotHighVal)
-    array.push(pivotHighs, pivotHighVal)
+    array.push(pivotHighs,    pivotHighVal)
     array.push(pivotHighBars, bar_index - pivotLen)
 if not na(pivotLowVal)
-    array.push(pivotLows, pivotLowVal)
+    array.push(pivotLows,    pivotLowVal)
     array.push(pivotLowBars, bar_index - pivotLen)
+if not na(tpPivotLowVal)
+    array.push(tpPivotLows,  tpPivotLowVal)
+    array.push(tpPivotLBars, bar_index - tpPivotLen)
+if not na(tpPivotHighVal)
+    array.push(tpPivotHighs, tpPivotHighVal)
+    array.push(tpPivotHBars, bar_index - tpPivotLen)
 
 while array.size(pivotHighBars) > 0 and bar_index - array.get(pivotHighBars, 0) > pivotLookback
     array.shift(pivotHighs)
@@ -180,6 +197,12 @@ while array.size(pivotHighBars) > 0 and bar_index - array.get(pivotHighBars, 0) 
 while array.size(pivotLowBars) > 0 and bar_index - array.get(pivotLowBars, 0) > pivotLookback
     array.shift(pivotLows)
     array.shift(pivotLowBars)
+while array.size(tpPivotLBars) > 0 and bar_index - array.get(tpPivotLBars, 0) > pivotLookback
+    array.shift(tpPivotLows)
+    array.shift(tpPivotLBars)
+while array.size(tpPivotHBars) > 0 and bar_index - array.get(tpPivotHBars, 0) > pivotLookback
+    array.shift(tpPivotHighs)
+    array.shift(tpPivotHBars)
 
 nearestSwingAbove(level) =>
     float nearest = na
@@ -199,8 +222,33 @@ nearestSwingBelow(level) =>
                 nearest := p
     nearest
 
+// Versions rapides (tpPivotLen) pour le suivi TP dynamique.
+// minFormBar : seuls les pivots dont la bougie de FORMATION est strictement
+// postérieure à cette barre (= barre d'entrée) sont des cibles valables — un
+// swing qui existait déjà avant l'entrée, ou formé sur la bougie d'entrée
+// elle-même, est du bruit du mouvement en cours, pas de la liquidité.
+tpNearestHighAbove(level, minFormBar) =>
+    float nearest = na
+    if array.size(tpPivotHighs) > 0
+        for i = 0 to array.size(tpPivotHighs) - 1
+            p = array.get(tpPivotHighs, i)
+            fb = array.get(tpPivotHBars, i)
+            if p > level and (na(minFormBar) or fb > minFormBar) and (na(nearest) or p < nearest)
+                nearest := p
+    nearest
+
+tpNearestLowBelow(level, minFormBar) =>
+    float nearest = na
+    if array.size(tpPivotLows) > 0
+        for i = 0 to array.size(tpPivotLows) - 1
+            p = array.get(tpPivotLows, i)
+            fb = array.get(tpPivotLBars, i)
+            if p < level and (na(minFormBar) or fb > minFormBar) and (na(nearest) or p > nearest)
+                nearest := p
+    nearest
+
 // ============================================================================
-// 4) COMPTEURS JOURNALIERS (2 pertes max / stop après 1 gain)
+// 4) COMPTEURS JOURNALIERS
 // ============================================================================
 var int  dayLosses = 0
 var int  dayWins = 0
@@ -216,12 +264,9 @@ if strategy.closedtrades > lastClosedCount
     tradeProfit = strategy.closedtrades.profit(strategy.closedtrades - 1)
     if tradeProfit > 0
         dayWins += 1
-        // Gagnant : on arrête de chercher un nouveau trade sur cette session.
         sessionWinLock := true
     else
         dayLosses += 1
-        // Perdant : deuxième (et dernière) chance sur cette session — on
-        // rouvre la recherche de breakout tant que sessionTradeCount < 2.
         if sessionTradeCount < 2
             breakoutDoneToday := false
     lastClosedCount := strategy.closedtrades
@@ -233,22 +278,12 @@ canTradeToday = dayLosses < maxLossesDay and (not stopAfterWin or dayWins < 1)
 // ============================================================================
 eodFlatten = useEodFlatten and (hour == flattenHour and minute >= flattenMinute)
 if eodFlatten
-    // cancel_all AVANT close_all, impérativement : dans l'ordre inverse,
-    // cancel_all annulait aussi l'ordre de fermeture que close_all venait de
-    // soumettre sur la même barre — le flatten ne s'exécutait alors jamais.
     strategy.cancel_all()
     if strategy.position_size != 0
         strategy.close_all(comment="Flatten fin de journée")
 
 // ============================================================================
-// 6) DÉTECTION DU BREAKOUT — clôture 5m qui CASSE l'opening range
-//    Le signal est le franchissement (clôture précédente dans le range,
-//    clôture courante dehors), pas le simple fait d'être hors du range :
-//    sinon, quand la bougie de cassure est refusée (R:R, filtre slide 5),
-//    le code réévaluait chaque bougie suivante et finissait par entrer
-//    40-70 min plus tard, loin du niveau, en plein milieu du mouvement.
-//    Après un refus, il faut que le prix réintègre le range et re-casse
-//    pour générer un nouveau signal.
+// 6) DÉTECTION DU BREAKOUT
 // ============================================================================
 firstBreakoutCheck = not inSession and orLocked and not breakoutDoneToday and not sessionWinLock and canTradeToday and not eodFlatten and withinTradingWindow
 crossedAboveOR = close > orHigh and close[1] <= orHigh
@@ -259,38 +294,20 @@ shortBreakout = firstBreakoutCheck and crossedBelowOR
 atrVal = ta.atr(atrLen)
 minDist = proximityMult * atrVal
 
-// Swing le plus proche au-delà du niveau, connu AU MOMENT de la bougie de
-// cassure — inclut donc les swings confirmés entre la clôture de l'OR et
-// l'entrée, qui sont souvent la cible la plus logique et la plus proche.
-// Les entrées tardives sont déjà empêchées par la règle de cassure franche
-// (section 6), donc plus besoin de figer cette valeur à la clôture de l'OR.
 nearestHighAbove = nearestSwingAbove(orHigh)
 nearestLowBelow  = nearestSwingBelow(orLow)
 
-// Filtre 1 : le niveau cassé est-il collé au H/L de la session précédente ?
 tooCloseToPrevHigh = usePrevSessionFilter and not na(prevDayHigh) and math.abs(orHigh - prevDayHigh) <= minDist
 tooCloseToPrevLow  = usePrevSessionFilter and not na(prevDayLow)  and math.abs(orLow  - prevDayLow)  <= minDist
 
-// Filtre 2 : y a-t-il de la vraie liquidité (swing) au-delà pour continuer ?
 hasLiquidityAbove = useSwingFilter ? (not na(nearestHighAbove) and (nearestHighAbove - orHigh) > minDist) : true
 hasLiquidityBelow = useSwingFilter ? (not na(nearestLowBelow)  and (orLow - nearestLowBelow)  > minDist) : true
 
-// Invalidation (slide 5) : trop proche du H/L précédent ET pas de liquidité au-delà
 longInvalid  = tooCloseToPrevHigh and not hasLiquidityAbove
 shortInvalid = tooCloseToPrevLow  and not hasLiquidityBelow
 
 // ============================================================================
-// 7) ENTRÉE — marché uniquement, sur cassure du CORPS de la bougie (close),
-//    pas de retest : si le R:R est insuffisant, aucun trade n'est pris.
-//    TP = swing (liquidité) le plus proche au-delà du niveau cassé, tel que
-//    connu à la bougie de cassure — pas une projection géométrique arbitraire.
-//    Si aucun swing n'existe au-delà à ce moment-là, il n'y a pas de cible de
-//    structure valable donc pas de trade.
-//    IMPORTANT : breakoutDoneToday ne se verrouille QUE quand un trade est
-//    réellement entré — une clôture hors range invalidée (slide 5) ou dont le
-//    R:R est insuffisant ne doit pas bloquer les clôtures suivantes de la même
-//    session (sinon un seul signal filtré condamne toute la fenêtre de trading,
-//    même si une meilleure structure apparaît juste après).
+// 7) ENTRÉE
 // ============================================================================
 if longBreakout and not longInvalid and not na(nearestHighAbove)
     entryPrice = close
@@ -307,6 +324,8 @@ if longBreakout and not longInvalid and not na(nearestHighAbove)
         sessionTradeCount += 1
         activeTpPrice := tpPrice
         activeSlPrice := slPrice
+        entryBarIdx := bar_index
+        entryPxSaved := entryPrice
         alert("ORB LONG (marché) @ " + str.tostring(entryPrice, format.mintick) +
               " | SL " + str.tostring(slPrice, format.mintick) +
               " | TP (swing) " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
@@ -326,36 +345,124 @@ if shortBreakout and not shortInvalid and not na(nearestLowBelow)
         sessionTradeCount += 1
         activeTpPrice := tpPrice
         activeSlPrice := slPrice
+        entryBarIdx := bar_index
+        entryPxSaved := entryPrice
         alert("ORB SHORT (marché) @ " + str.tostring(entryPrice, format.mintick) +
               " | SL " + str.tostring(slPrice, format.mintick) +
               " | TP (swing) " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
 
 // ============================================================================
-// 7bis) TP DYNAMIQUE — au lieu de garder le swing connu à l'entrée (qui peut
-//    être lointain et faire courir le trade des heures, jusque dans la
-//    session suivante), on suit le swing le plus proche à mesure qu'il s'en
-//    forme de nouveaux dans le sens du trade. nearestHighAbove/nearestLowBelow
-//    sont déjà recalculés à chaque barre (section 3) ; par construction un
-//    nouveau pivot ne peut que rapprocher la cible, jamais l'éloigner. Le
-//    stop (activeSlPrice, figé à l'entrée) est toujours repassé tel quel :
-//    strategy.exit() annule tout paramètre non fourni au réappel.
+// 7bis) TP DYNAMIQUE — pivots rapides (tpPivotLen) pour rester réactif
+//
+// Problème initial : nearestLowBelow (pivotLen=8) pose le TP sur des swings
+// anciens (crash du 7-8 avril ~21 000). Avec pivotLen=8, le pivot du 15h05
+// n'est confirmé qu'à 15h45 (40 min trop tard : prix déjà remonté). Avec
+// tpPivotLen=2, confirmation à 15h15 (10 min), le prix est encore près du bas.
+//
+// Garde-fous (cas GC du 18 juin 02:55) : ne suivre QUE les swings formés
+// APRÈS la bougie d'entrée, au-delà du prix d'entrée d'au moins minDist
+// (x ATR) dans le sens du trade. Avant : le long cherchait au-dessus de
+// orLow (!) parmi TOUS les pivots rapides, y compris antérieurs à l'entrée —
+// le TP sautait sur un micro-swing déjà existant, parfois SOUS le prix
+// d'entrée, et « TP proximité swing » fermait le trade 1-2 bougies après
+// l'entrée à ~2 points, au lieu de viser le swing récent établi (ex. swing
+// haut du 17 juin 20h45). Le TP ne peut que se rapprocher (jamais
+// s'éloigner). SL inchangé.
 // ============================================================================
-if dynamicTpFollow and strategy.position_size != 0 and not na(activeTpPrice)
-    candidateTp = strategy.position_size > 0 ? nearestHighAbove : nearestLowBelow
-    if not na(candidateTp) and candidateTp != activeTpPrice
-        activeTpPrice := candidateTp
-        if strategy.position_size > 0
-            strategy.exit("Sortie Long", from_entry="Long Marché", stop=activeSlPrice, limit=activeTpPrice)
-        else
+if dynamicTpFollow and strategy.position_size != 0 and not na(activeTpPrice) and not na(entryBarIdx)
+    if strategy.position_size < 0
+        // Short : swing bas formé après l'entrée, sous entrée - minDist,
+        // plus proche que le TP courant
+        candidateTp = tpNearestLowBelow(math.min(entryPxSaved - minDist, orLow), entryBarIdx)
+        if not na(candidateTp) and candidateTp > activeTpPrice
+            activeTpPrice := candidateTp
             strategy.exit("Sortie Short", from_entry="Short Marché", stop=activeSlPrice, limit=activeTpPrice)
+    else
+        // Long : swing haut formé après l'entrée, au-dessus d'entrée + minDist,
+        // plus proche que le TP courant
+        candidateTp = tpNearestHighAbove(math.max(entryPxSaved + minDist, orHigh), entryBarIdx)
+        if not na(candidateTp) and candidateTp < activeTpPrice
+            activeTpPrice := candidateTp
+            strategy.exit("Sortie Long", from_entry="Long Marché", stop=activeSlPrice, limit=activeTpPrice)
 
 // ============================================================================
-// 8) SORTIE ANTICIPÉE — clôture de bougie à moins de X ticks du swing cible :
-//    on prend le profit sur la clôture au lieu d'exiger que la limite soit
-//    touchée au tick près (le marché s'arrête souvent juste sous/sur la
-//    liquidité du swing avant de se retourner).
+// 7ter) ENTRÉE RETEST — cassure éloignée : quand le signal est refusé par le
+//    filtre R:R de l'entrée marché (clôture trop loin du niveau par rapport
+//    au swing cible, ou aucun swing connu), on pose un ordre LIMITE sur la
+//    ligne cassée et on attend le retracement. SL = orMid (comme l'entrée
+//    marché), TP = retestRR x R depuis la ligne (R = ligne - orMid = moitié
+//    du range). L'ordre est annulé si nouvelle session, fenêtre de recherche
+//    expirée, flatten ou cassure opposée. breakoutDoneToday est consommé à
+//    la POSE de l'ordre : le signal est utilisé, rempli ou non (la 2e chance
+//    après perte reste gérée par le compteur de session).
+// ============================================================================
+// Remplissage : la position s'ouvre pendant la barre, détectée à sa clôture.
+if pendingRetestDir == 1 and strategy.position_size > 0
+    longRetestActive := true
+    pendingRetestDir := 0
+if pendingRetestDir == -1 and strategy.position_size < 0
+    shortRetestActive := true
+    pendingRetestDir := 0
+
+// Annulation d'un ordre en attente devenu caduc.
+if pendingRetestDir != 0 and (isNewSessionStart or not withinTradingWindow or eodFlatten or (pendingRetestDir == 1 and crossedBelowOR) or (pendingRetestDir == -1 and crossedAboveOR))
+    strategy.cancel("Long Retest")
+    strategy.cancel("Short Retest")
+    pendingRetestDir := 0
+    retestLvl := na
+    retestSl := na
+    retestTp := na
+
+// Pose de l'ordre : signal valide mais entrée marché refusée (mêmes
+// conditions que la section 7, recalculées ici car la position ne reflète
+// pas encore une entrée du même bar).
+if useRetestEntry and pendingRetestDir == 0 and strategy.position_size == 0
+    if longBreakout and not longInvalid
+        mRisk = close - orMid
+        mRr = not na(nearestHighAbove) and mRisk > 0 ? (nearestHighAbove - close) / mRisk : na
+        marketTaken = not na(mRr) and mRr >= minRR
+        lineRisk = orHigh - orMid
+        if not marketTaken and lineRisk > 0
+            strategy.entry("Long Retest", strategy.long, limit=orHigh, comment="ORB Long Retest")
+            strategy.exit("Sortie Long Retest", from_entry="Long Retest", stop=orMid, limit=orHigh + retestRR * lineRisk)
+            pendingRetestDir := 1
+            retestLvl := orHigh
+            retestSl := orMid
+            retestTp := orHigh + retestRR * lineRisk
+            breakoutDoneToday := true
+            sessionTradeCount += 1
+            alert("ORB LONG RETEST (limite) @ " + str.tostring(orHigh, format.mintick) +
+                  " | SL " + str.tostring(orMid, format.mintick) +
+                  " | TP " + str.tostring(retestTp, format.mintick), alert.freq_once_per_bar_close)
+    if shortBreakout and not shortInvalid
+        mRisk = orMid - close
+        mRr = not na(nearestLowBelow) and mRisk > 0 ? (close - nearestLowBelow) / mRisk : na
+        marketTaken = not na(mRr) and mRr >= minRR
+        lineRisk = orMid - orLow
+        if not marketTaken and lineRisk > 0
+            strategy.entry("Short Retest", strategy.short, limit=orLow, comment="ORB Short Retest")
+            strategy.exit("Sortie Short Retest", from_entry="Short Retest", stop=orMid, limit=orLow - retestRR * lineRisk)
+            pendingRetestDir := -1
+            retestLvl := orLow
+            retestSl := orMid
+            retestTp := orLow - retestRR * lineRisk
+            breakoutDoneToday := true
+            sessionTradeCount += 1
+            alert("ORB SHORT RETEST (limite) @ " + str.tostring(orLow, format.mintick) +
+                  " | SL " + str.tostring(orMid, format.mintick) +
+                  " | TP " + str.tostring(retestTp, format.mintick), alert.freq_once_per_bar_close)
+
+// ============================================================================
+// 8) SORTIE — TP touché en mèche OU clôture proche du swing
+//
+// Bug : process_orders_on_close=true évalue les ordres limite sur la CLÔTURE
+// uniquement. Si low (short) franchit le TP en mèche sans que la clôture y
+// soit, strategy.exit(limit) ne se déclenche pas.
+// Fix wick : réemet strategy.exit avec limit=close (toujours rempli sur
+// cette clôture) dès que la mèche franchit le niveau cible.
 // ============================================================================
 tpTolerance = tpProximityTicks * syminfo.mintick
+
 longNearTp  = tpProximityTicks > 0 and strategy.position_size > 0 and not na(activeTpPrice) and close >= activeTpPrice - tpTolerance
 shortNearTp = tpProximityTicks > 0 and strategy.position_size < 0 and not na(activeTpPrice) and close <= activeTpPrice + tpTolerance
 if longNearTp or shortNearTp
@@ -363,9 +470,38 @@ if longNearTp or shortNearTp
     strategy.close_all(comment="TP proximité swing")
     activeTpPrice := na
     activeSlPrice := na
+    entryBarIdx := na
+    entryPxSaved := na
+
+longWickTp  = not longNearTp  and strategy.position_size > 0 and not na(activeTpPrice) and high >= activeTpPrice
+shortWickTp = not shortNearTp and strategy.position_size < 0 and not na(activeTpPrice) and low  <= activeTpPrice
+if longWickTp
+    strategy.exit("Sortie Long",  from_entry="Long Marché",  stop=activeSlPrice, limit=close)
+    activeTpPrice := na
+    activeSlPrice := na
+if shortWickTp
+    strategy.exit("Sortie Short", from_entry="Short Marché", stop=activeSlPrice, limit=close)
+    activeTpPrice := na
+    activeSlPrice := na
+
 if strategy.position_size == 0 and not (longBreakout or shortBreakout)
     activeTpPrice := na
     activeSlPrice := na
+    entryBarIdx := na
+    entryPxSaved := na
+
+// Position retest : PAS de sortie anticipée par proximité (règle utilisateur,
+// cas CL du 16 juin 17h00 : le short retest sortait 5 min après l'entrée sur
+// « TP proximité retest » à ~0,7R). Un trade retest sort au STOP ou au TARGET,
+// rien d'autre. Seul le fix mèche reste : si la mèche touche le TP sans que
+// la limite se remplisse (process_orders_on_close), sortie sur la clôture.
+if longRetestActive and strategy.position_size > 0 and high >= retestTp
+    strategy.exit("Sortie Long Retest", from_entry="Long Retest", stop=retestSl, limit=close)
+if shortRetestActive and strategy.position_size < 0 and low <= retestTp
+    strategy.exit("Sortie Short Retest", from_entry="Short Retest", stop=retestSl, limit=close)
+if strategy.position_size == 0
+    longRetestActive := false
+    shortRetestActive := false
 
 // ============================================================================
 // VISUELS
@@ -376,12 +512,14 @@ plot(orLocked ? orHigh : na, "OR High", color=color.new(color.teal, 0), style=pl
 plot(orLocked ? orLow  : na, "OR Low",  color=color.new(color.red, 0),  style=plot.style_linebr, linewidth=1)
 plot(orLocked ? orMid  : na, "OR Mid (SL)", color=color.new(color.gray, 40), style=plot.style_linebr, linewidth=1)
 
-// Cible de structure (swing le plus proche au-delà du niveau cassé) = TP potentiel.
 plot(orLocked ? nearestHighAbove : na, "TP Long (swing structure)", color=color.new(color.lime, 20), style=plot.style_linebr, linewidth=1)
 plot(orLocked ? nearestLowBelow  : na, "TP Short (swing structure)", color=color.new(color.maroon, 20), style=plot.style_linebr, linewidth=1)
 
 plot(prevDayHigh, "Prev Session High", color=color.new(color.orange, 60), style=plot.style_linebr, linewidth=1)
 plot(prevDayLow,  "Prev Session Low",  color=color.new(color.orange, 60), style=plot.style_linebr, linewidth=1)
+
+// Ligne jaune = ordre limite retest en attente sur la ligne cassée.
+plot(pendingRetestDir != 0 ? retestLvl : na, "Ordre retest en attente", color=color.new(color.yellow, 0), style=plot.style_linebr, linewidth=2)
 
 plotshape(not na(pivotHighVal), title="Swing High", style=shape.triangledown, location=location.abovebar,
      color=color.fuchsia, size=size.tiny, offset=-pivotLen)

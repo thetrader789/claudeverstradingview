@@ -61,7 +61,7 @@ disableLongsJapanLondon = input.bool(false, "Pas de longs sur Japon et Londres",
 tpProximityTicks = input.int(10, "Tolérance TP (ticks) — clôture proche du swing = sortie", minval=0, group=grpTrade,
      tooltip="Si une bougie CLÔTURE à moins de X ticks du swing cible sans que la limite ait été touchée, on ferme le trade au marché sur cette clôture plutôt que d'exiger le tick exact (cas du 18 juin : pic à quelques ticks sous le TP puis retournement jusqu'au stop). 0 = désactivé. GC : 1 tick = 0,1 pt ; NQ : 1 tick = 0,25 pt.")
 dynamicTpFollow = input.bool(false, "TP dynamique (suit les nouveaux swings formés après l'entrée)", group=grpTrade,
-     tooltip="Par défaut le TP est figé au swing le plus proche connu à la bougie de cassure, même s'il est lointain — un trade peut alors courir des heures et chevaucher la session suivante. Activé : à chaque nouveau swing confirmé plus proche dans le sens du trade, la limite est déplacée dessus (elle ne peut que se rapprocher, jamais s'éloigner). Le stop (orMid figé à l'entrée) n'est jamais modifié.")
+     tooltip="Par défaut le TP est figé au swing le plus proche connu à la bougie de cassure, même s'il est lointain — un trade peut alors courir des heures et chevaucher la session suivante. Activé : à chaque nouveau swing confirmé plus proche dans le sens du trade, la limite est déplacée dessus (elle ne peut que se rapprocher, jamais s'éloigner). Seuls comptent les swings formés APRÈS la bougie d'entrée et au-delà du prix d'entrée d'au moins la distance min. (x ATR) : un micro-swing qui vient de se faire au niveau de l'entrée n'est pas une cible, le TP initial reste le swing récent établi. Le stop (orMid figé à l'entrée) n'est jamais modifié.")
 
 // ============================================================================
 // 1) SESSION & OPENING RANGE
@@ -107,6 +107,14 @@ var float activeTpPrice     = na
 // strategy.exit quand le TP dynamique bouge (les deux valeurs doivent être
 // repassées à chaque appel, sinon l'omise est annulée).
 var float activeSlPrice     = na
+// Barre et prix d'entrée du trade en cours : le TP dynamique n'accepte que
+// des swings formés strictement APRÈS cette barre, au-delà de ce prix dans le
+// sens du trade (cas GC du 18 juin 02:55 sur la variante Asia London : le TP
+// sautait sur un micro-pivot qui venait de se faire, parfois SOUS l'entrée,
+// et « TP proximité swing » fermait le trade 2 bougies plus tard à ~2 points,
+// au lieu de viser le swing récent établi — ex. swing haut du 17 juin 20h45).
+var int   entryBarIdx       = na
+var float entryPxSaved      = na
 
 // "na(orHigh)" couvre le cas limite où la toute première barre chargée à
 // l'écran tombe déjà dans une session (inSession[1] vaut alors na, pas false).
@@ -184,21 +192,28 @@ while array.size(pivotLowBars) > 0 and bar_index - array.get(pivotLowBars, 0) > 
     array.shift(pivotLows)
     array.shift(pivotLowBars)
 
-nearestSwingAbove(level) =>
+// minFormBar (na = pas de restriction) : seuls les pivots dont la bougie de
+// FORMATION est strictement postérieure à cette barre sont retenus — utilisé
+// par le TP dynamique avec la barre d'entrée, car un swing qui existait déjà
+// avant l'entrée (ou formé sur la bougie d'entrée elle-même) est du bruit du
+// mouvement en cours, pas de la liquidité cible.
+nearestSwingAbove(level, minFormBar) =>
     float nearest = na
     if array.size(pivotHighs) > 0
         for i = 0 to array.size(pivotHighs) - 1
             p = array.get(pivotHighs, i)
-            if p > level and (na(nearest) or p < nearest)
+            fb = array.get(pivotHighBars, i)
+            if p > level and (na(minFormBar) or fb > minFormBar) and (na(nearest) or p < nearest)
                 nearest := p
     nearest
 
-nearestSwingBelow(level) =>
+nearestSwingBelow(level, minFormBar) =>
     float nearest = na
     if array.size(pivotLows) > 0
         for i = 0 to array.size(pivotLows) - 1
             p = array.get(pivotLows, i)
-            if p < level and (na(nearest) or p > nearest)
+            fb = array.get(pivotLowBars, i)
+            if p < level and (na(minFormBar) or fb > minFormBar) and (na(nearest) or p > nearest)
                 nearest := p
     nearest
 
@@ -269,8 +284,8 @@ minDist = proximityMult * atrVal
 // sont souvent la cible la plus logique et la plus proche. Les entrées
 // tardives sont déjà empêchées par la règle de cassure franche (section 6),
 // donc plus besoin de figer cette valeur à la clôture de l'OR.
-nearestHighAbove = nearestSwingAbove(orHigh)
-nearestLowBelow  = nearestSwingBelow(orLow)
+nearestHighAbove = nearestSwingAbove(orHigh, int(na))
+nearestLowBelow  = nearestSwingBelow(orLow, int(na))
 
 // Filtre 1 : le niveau cassé est-il collé au H/L de la session précédente ?
 tooCloseToPrevHigh = usePrevSessionFilter and not na(prevDayHigh) and math.abs(orHigh - prevDayHigh) <= minDist
@@ -312,6 +327,8 @@ if longBreakout and not longInvalid and not na(nearestHighAbove)
         sessionTradeCount += 1
         activeTpPrice := tpPrice
         activeSlPrice := slPrice
+        entryBarIdx := bar_index
+        entryPxSaved := entryPrice
         alert("ORB LONG (marché) @ " + str.tostring(entryPrice, format.mintick) +
               " | SL " + str.tostring(slPrice, format.mintick) +
               " | TP (swing) " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
@@ -331,6 +348,8 @@ if shortBreakout and not shortInvalid and not na(nearestLowBelow)
         sessionTradeCount += 1
         activeTpPrice := tpPrice
         activeSlPrice := slPrice
+        entryBarIdx := bar_index
+        entryPxSaved := entryPrice
         alert("ORB SHORT (marché) @ " + str.tostring(entryPrice, format.mintick) +
               " | SL " + str.tostring(slPrice, format.mintick) +
               " | TP (swing) " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
@@ -338,20 +357,30 @@ if shortBreakout and not shortInvalid and not na(nearestLowBelow)
 // ============================================================================
 // 7bis) TP DYNAMIQUE — au lieu de garder le swing connu à l'entrée (qui peut
 //    être lointain et faire courir le trade des heures, jusque dans la
-//    session suivante), on suit le swing le plus proche à mesure qu'il s'en
-//    forme de nouveaux dans le sens du trade. nearestHighAbove/nearestLowBelow
-//    sont déjà recalculés à chaque barre (section 3) ; par construction un
-//    nouveau pivot ne peut que rapprocher la cible, jamais l'éloigner. Le
-//    stop (activeSlPrice, figé à l'entrée) est toujours repassé tel quel :
-//    strategy.exit() annule tout paramètre non fourni au réappel.
+//    session suivante), on suit les swings qui se forment pendant le trade.
+//    Garde-fous (cas GC du 18 juin 02:55 sur la variante Asia London) : seuls
+//    comptent les pivots formés strictement APRÈS la bougie d'entrée, au-delà
+//    du prix d'entrée d'au moins minDist (x ATR) dans le sens du trade — un
+//    micro-swing qui vient de se faire au niveau de l'entrée n'est pas une
+//    cible, le TP initial reste le swing récent établi. Le TP ne peut que se
+//    rapprocher (jamais s'éloigner). Le stop (activeSlPrice, figé à l'entrée)
+//    est toujours repassé tel quel : strategy.exit() annule tout paramètre
+//    non fourni au réappel.
 // ============================================================================
-if dynamicTpFollow and strategy.position_size != 0 and not na(activeTpPrice)
-    candidateTp = strategy.position_size > 0 ? nearestHighAbove : nearestLowBelow
-    if not na(candidateTp) and candidateTp != activeTpPrice
-        activeTpPrice := candidateTp
-        if strategy.position_size > 0
+if dynamicTpFollow and strategy.position_size != 0 and not na(activeTpPrice) and not na(entryBarIdx)
+    if strategy.position_size > 0
+        // Long : swing haut formé après l'entrée, au-dessus d'entrée + minDist,
+        // plus proche que le TP courant
+        candidateTp = nearestSwingAbove(math.max(entryPxSaved + minDist, orHigh), entryBarIdx)
+        if not na(candidateTp) and candidateTp < activeTpPrice
+            activeTpPrice := candidateTp
             strategy.exit("Sortie Long", from_entry="Long Marché", stop=activeSlPrice, limit=activeTpPrice)
-        else
+    else
+        // Short : swing bas formé après l'entrée, sous entrée - minDist,
+        // plus proche que le TP courant
+        candidateTp = nearestSwingBelow(math.min(entryPxSaved - minDist, orLow), entryBarIdx)
+        if not na(candidateTp) and candidateTp > activeTpPrice
+            activeTpPrice := candidateTp
             strategy.exit("Sortie Short", from_entry="Short Marché", stop=activeSlPrice, limit=activeTpPrice)
 
 // ============================================================================
@@ -368,9 +397,13 @@ if longNearTp or shortNearTp
     strategy.close_all(comment="TP proximité swing")
     activeTpPrice := na
     activeSlPrice := na
+    entryBarIdx := na
+    entryPxSaved := na
 if strategy.position_size == 0 and not (longBreakout or shortBreakout)
     activeTpPrice := na
     activeSlPrice := na
+    entryBarIdx := na
+    entryPxSaved := na
 
 // ============================================================================
 // VISUELS
