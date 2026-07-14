@@ -14,8 +14,12 @@ strategy("FP Multi-Marchés 1mn", pyramiding = 0, overlay = true, margin_long = 
 marche = input.string('Auto (symbole)', 'Marché', options=['Auto (symbole)', 'NQ / indices US', 'GC (or)', 'SI (argent)', 'CL (pétrole WTI)', 'NG (gaz naturel)', 'FDAX (DAX)', 'Personnalisé'], group='Marché')
 qtyIn  = input.int(10, 'Contrats par trade', minval=1, group='Marché')
 
-// Mode Personnalisé : sessions en heure de Paris — la bougie de référence est
-// la minute AVANT l'ouverture (ex. 15:29 pour une ouverture à 15h30)
+// Mode Personnalisé : sessions en heure de Paris. La bougie de référence est
+// la bougie 1 mn qui OUVRE à l'heure indiquée — le biais (refBull/refBear)
+// est figé à sa clôture, 1 minute plus tard. Session principale US : la
+// minute AVANT l'ouverture (15:29 → biais figé à 15:30, l'open cash) ;
+// Asie/Londres : la première bougie de la session (02:00 → biais à 02:01,
+// 09:00 → biais à 09:01) — réglage utilisateur du 13/07.
 pSAon = input.bool(true, '', group='Marché — Personnalisé', inline='pA')
 pSAH = input.int(15, 'Session principale  h', minval=0, maxval=23, group='Marché — Personnalisé', inline='pA')
 pSAM = input.int(29, 'min', minval=0, maxval=59, group='Marché — Personnalisé', inline='pA')
@@ -23,16 +27,25 @@ pSBon = input.bool(true, '', group='Marché — Personnalisé', inline='pB')
 pSBH = input.int(0,  'Réouverture nuit    h', minval=0, maxval=23, group='Marché — Personnalisé', inline='pB')
 pSBM = input.int(0,  'min', minval=0, maxval=59, group='Marché — Personnalisé', inline='pB')
 pSCon = input.bool(true, '', group='Marché — Personnalisé', inline='pC')
-pSCH = input.int(1,  'Session asiatique   h', minval=0, maxval=23, group='Marché — Personnalisé', inline='pC')
-pSCM = input.int(59, 'min', minval=0, maxval=59, group='Marché — Personnalisé', inline='pC')
+pSCH = input.int(2,  'Session asiatique   h', minval=0, maxval=23, group='Marché — Personnalisé', inline='pC')
+pSCM = input.int(0,  'min', minval=0, maxval=59, group='Marché — Personnalisé', inline='pC')
 pSDon = input.bool(true, '', group='Marché — Personnalisé', inline='pD')
-pSDH = input.int(8,  'Session Londres     h', minval=0, maxval=23, group='Marché — Personnalisé', inline='pD')
-pSDM = input.int(59, 'min', minval=0, maxval=59, group='Marché — Personnalisé', inline='pD')
+pSDH = input.int(9,  'Session Londres     h', minval=0, maxval=23, group='Marché — Personnalisé', inline='pD')
+pSDM = input.int(0,  'min', minval=0, maxval=59, group='Marché — Personnalisé', inline='pD')
 pHebOn  = input.bool(false, 'News hebdo récurrente', group='Marché — Personnalisé', inline='pH')
 pHebDay = input.string('Mercredi', '', options=['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi'], group='Marché — Personnalisé', inline='pH')
 pHebH = input.int(16, 'News hebdo          h', minval=0, maxval=23, group='Marché — Personnalisé', inline='pH2')
 pHebM = input.int(29, 'min', minval=0, maxval=59, group='Marché — Personnalisé', inline='pH2')
 pK = input.float(1.0, 'Échelle volatilité vs NQ (k)', minval=0.000001, step=0.05, group='Marché — Personnalisé')
+
+// ─── Webhook : alertes JSON vers le dispatcher FastAPI (state_manager) ───────
+// Le serveur choisit le compte (rotation 1 trade/compte/jour) et la taille
+// réelle ; qty est indicatif. Créer UNE alerte TradingView sur la stratégie
+// avec la condition « Toute fonction alert() » et l'URL du webhook.
+useWebhook    = input.bool(false, 'Alertes webhook JSON', group='Webhook')
+whSecret      = input.string('CHANGE_ME', 'Secret partagé', group='Webhook', tooltip='Doit correspondre au secret attendu par le serveur FastAPI')
+whStrat       = input.string('FP_MULTI_1MN', 'Identifiant stratégie', group='Webhook')
+whSendUpdates = input.bool(false, 'Envoyer les màj de stop (trailing)', group='Webhook', tooltip='Envoie modify_stop quand le stop suiveur bouge (types cross / break-even). Max 1 alerte par bougie.')
 
 pHebDow = switch pHebDay
     'Lundi'    => dayofweek.monday
@@ -54,19 +67,24 @@ mktEff = marche != 'Auto (symbole)' ? marche :
 // slot A = session principale (comportement « USA » : pas de cross, reset lastPeriod)
 // slot B = réouverture nuit Globex/Eurex (bougie réf = première bougie de la session)
 // slot C = session asiatique | slot D = Londres
-// NQ   : A 15h29 (cash US 15h30), B 00h00 (Globex), C 01h59, D 08h59
-// GC/SI : A 14h19 (COMEX 14h20 = 8h20 ET), B 00h00, C 01h59, D 08h59
-// CL/NG : A 14h59 (pit NYMEX 15h00 = 9h00 ET), B 00h00, C 01h59, D 08h59
+// Bougie de référence = la bougie 1 mn qui OUVRE à l'heure du slot ; le biais
+// (refBull/refBear) est figé à sa CLÔTURE, 1 minute plus tard. Règle 13/07 :
+// A (US) = minute avant l'open cash (15h29 → biais à 15h30) ; C/D (Asie et
+// Londres) = première bougie de la session (02h00 → biais à 02h01, 09h00 →
+// biais à 09h01) — avant, C/D étaient à 01h59/08h59.
+// NQ   : A 15h29 (cash US 15h30), B 00h00 (Globex), C 02h00, D 09h00
+// GC/SI : A 14h19 (COMEX 14h20 = 8h20 ET), B 00h00, C 02h00, D 09h00
+// CL/NG : A 14h59 (pit NYMEX 15h00 = 9h00 ET), B 00h00, C 02h00, D 09h00
 // FDAX : A 08h59 (Xetra 09h00), B 01h10 (réouverture Eurex),
 //        C 15h29 (cash US 15h30), D 17h29 (clôture Xetra 17h30)
 [sAH, sAM, sBH, sBM, sCH, sCM, sDH, sDM] = switch mktEff
-    'GC (or)'          => [14, 19, 0, 0, 1, 59, 8, 59]
-    'SI (argent)'      => [14, 19, 0, 0, 1, 59, 8, 59]
-    'CL (pétrole WTI)' => [14, 59, 0, 0, 1, 59, 8, 59]
-    'NG (gaz naturel)' => [14, 59, 0, 0, 1, 59, 8, 59]
+    'GC (or)'          => [14, 19, 0, 0, 2, 0, 9, 0]
+    'SI (argent)'      => [14, 19, 0, 0, 2, 0, 9, 0]
+    'CL (pétrole WTI)' => [14, 59, 0, 0, 2, 0, 9, 0]
+    'NG (gaz naturel)' => [14, 59, 0, 0, 2, 0, 9, 0]
     'FDAX (DAX)'       => [8, 59, 1, 10, 15, 29, 17, 29]
     'Personnalisé'     => [pSAH, pSAM, pSBH, pSBM, pSCH, pSCM, pSDH, pSDM]
-    => [15, 29, 0, 0, 1, 59, 8, 59]
+    => [15, 29, 0, 0, 2, 0, 9, 0]
 
 // Activation des slots par marché : sur CL/NG, aucun trade entre 00h00 et
 // 08h00 Paris (retour utilisateur 10/07) — slots nuit (B) et Asie (C) OFF,
@@ -846,6 +864,56 @@ riskShortNow = math.min(math.max(structStopShortLvl - close, minStopPts), maxSto
 rrLongOk  = useStructStop ? (openValue - close) >= riskLongNow  * minRR : (openValue - close) >= sp
 rrShortOk = useStructStop ? (close - openValue) >= riskShortNow * minRR : (close - openValue) >= sp
 
+// ─── Webhook : construction et envoi du payload JSON ─────────────────────────
+// SL/TP calculés au moment du signal avec close comme prix d'entrée estimé
+// (l'ordre marché est rempli à la bougie suivante : léger écart possible).
+// Le serveur pose les brackets stop/TP chez Tradovate à partir de ces niveaux.
+whNum(float v) =>
+    na(v) ? 'null' : str.tostring(math.round_to_mintick(v))
+
+whAlert(string action, float slLvl, float tpLvl) =>
+    if useWebhook
+        msg = '{"secret":"' + whSecret
+         + '","strategy":"' + whStrat
+         + '","symbol":"' + syminfo.root
+         + '","ticker":"' + syminfo.tickerid
+         + '","action":"' + action
+         + '","tradeType":"' + tradeType
+         + '","qty":' + str.tostring(qtyIn)
+         + ',"price":' + str.tostring(math.round_to_mintick(close))
+         + ',"stopLoss":' + whNum(slLvl)
+         + ',"takeProfit":' + whNum(tpLvl)
+         + ',"time":"' + str.format_time(timenow, 'yyyy-MM-dd HH:mm:ss', 'Europe/Paris') + '"}'
+        alert(msg, alert.freq_once_per_bar)
+
+// TP plafonné par la clôture au profit fixe (même logique que la gestion d'exit)
+whCapProfit(float tpLvl, bool isLong) =>
+    if useProfitClose
+        off = profitCloseUsd / (syminfo.pointvalue * qtyIn)
+        lim = isLong ? close + off : close - off
+        na(tpLvl) ? lim : (isLong ? math.min(tpLvl, lim) : math.max(tpLvl, lim))
+    else
+        tpLvl
+
+// À appeler APRÈS l'affectation de tradeType dans chaque bloc d'entrée
+whEntryLong() =>
+    isCross = tradeType == 'crossContinue' or tradeType == 'crossSimple'
+    slL = isCross ? x2 : close - (useStructStop ? riskLongNow : sp)
+    tpL = isCross ? lastPeriod :
+         tradeType == 'continue' ? close + tp :
+         revTP == '1,5 ATR' ? close + a :
+         revTP == 'Bord proche zone FP' ? zoneLow : openValue
+    whAlert('buy', slL, whCapProfit(tpL, true))
+
+whEntryShort() =>
+    isCross = tradeType == 'crossContinue' or tradeType == 'crossSimple'
+    slS = isCross ? x : close + (useStructStop ? riskShortNow : sp)
+    tpS = isCross ? lastPeriod :
+         tradeType == 'continue' ? close - tp :
+         revTP == '1,5 ATR' ? close - a :
+         revTP == 'Bord proche zone FP' ? zoneHigh : openValue
+    whAlert('sell', slS, whCapProfit(tpS, false))
+
 // ─── TJR : entrées — confirmation acceptée jusqu'à armBars bougies après le fill ─
 bool entered = false
 wickOkLong  = not (highWickSize > bodySize * 0.4)
@@ -864,6 +932,7 @@ if armOk(armContLongBar) and not entered and strategy.position_size == 0 and con
     else
         tradeType := "crossContinue"
     label.new(bar_index, high, text=tradeType)
+    whEntryLong()
     armContLongBar := na
     entered := true
     entriesWindow += 1
@@ -881,6 +950,7 @@ if armOk(armContShortBar) and not entered and strategy.position_size == 0 and co
     else
         tradeType := "crossContinue"
     label.new(bar_index, high, text=tradeType)
+    whEntryShort()
     armContShortBar := na
     entered := true
     entriesWindow += 1
@@ -907,6 +977,7 @@ if armOk(armRevLongBar) and not entered and strategy.position_size == 0
     else
         tradeType := "crossSimple"
     label.new(bar_index, high, text=tradeType)
+    whEntryLong()
     armRevLongBar := na
     entered := true
     entriesWindow += 1
@@ -933,6 +1004,7 @@ if armOk(armRevShortBar) and not entered and strategy.position_size == 0
     else
         tradeType := "crossSimple"
     label.new(bar_index, high, text=tradeType)
+    whEntryShort()
     armRevShortBar := na
     entered := true
     entriesWindow += 1
@@ -956,6 +1028,7 @@ if liteReentry and reEnterAfterLoss and liteArmOk(rearmLongBar) and not entered
     else
         tradeType := "crossSimple"
     label.new(bar_index, high, text="reentry " + tradeType)
+    whEntryLong()
     rearmLongBar := na
     entered := true
     entriesWindow += 1
@@ -976,6 +1049,7 @@ if liteReentry and reEnterAfterLoss and liteArmOk(rearmShortBar) and not entered
     else
         tradeType := "crossSimple"
     label.new(bar_index, high, text="reentry " + tradeType)
+    whEntryShort()
     rearmShortBar := na
     entered := true
     entriesWindow += 1
@@ -1163,6 +1237,10 @@ if beActive and not beArmed and not na(beTarget) and strategy.position_size != 0
     if strategy.position_size < 0 and low <= beTarget
         beArmed := true
 
+// Webhook : break-even armé → le serveur remonte son stop à son prix d'entrée réel
+if beArmed and not beArmed[1] and strategy.position_size != 0
+    whAlert('breakeven', strategy.position_avg_price, float(na))
+
 if beArmed and strategy.position_size > 0
     stop_price := na(stop_price) ? strategy.position_avg_price : math.max(stop_price, strategy.position_avg_price)
 if beArmed and strategy.position_size < 0
@@ -1180,6 +1258,19 @@ if useProfitClose and strategy.position_size != 0
         profitLimS = strategy.position_avg_price - profitOffset
         tp_price := na(tp_price) ? profitLimS : math.max(tp_price, profitLimS)
 
+// Webhook : suivi du stop suiveur (types cross / break-even) — n'envoie que les
+// changements ; le niveau initial part déjà dans l'alerte d'entrée
+var float whLastStop = na
+if strategy.position_size == 0
+    whLastStop := na
+if whSendUpdates and strategy.position_size != 0 and not na(stop_price)
+    stopNow = math.round_to_mintick(stop_price)
+    if na(whLastStop)
+        whLastStop := stopNow
+    else if stopNow != whLastStop
+        whAlert('modify_stop', stop_price, tp_price)
+        whLastStop := stopNow
+
 strategy.exit("SL/TP LONG", from_entry="Long", stop=stop_price, limit=tp_price)
 
 strategy.exit("SL/TP Short", from_entry="Short", stop=stop_price, limit=tp_price)
@@ -1191,6 +1282,8 @@ openOutFP = not (open > lowFP and open < highFP)
 fairPriceCond = closeInFP and openOutFP
 
 if fairPriceCond
+    if strategy.position_size != 0
+        whAlert('flatten', float(na), float(na))
     strategy.close_all("Fair price reached")
 
 if conditionStart
