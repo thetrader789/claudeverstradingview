@@ -1,0 +1,7 @@
+# Ne jamais committer : identifiants, état runtime, kill switch
+accounts.json
+state.json
+state.tmp
+PAUSE
+__pycache__/
+venv/

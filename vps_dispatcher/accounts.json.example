@@ -1,0 +1,90 @@
+{
+  "global": {
+    "webhook_secret_env": "WEBHOOK_SECRET",
+    "timezone": "Europe/Paris",
+    "kill_switch_file": "PAUSE",
+    "max_trades_par_compte_par_jour": 1
+  },
+
+  "firms": {
+    "apex": {
+      "environnement": "demo",
+      "commentaire": "demo.tradovateapi.com tant que non validé ; passer a live apres tests papier",
+      "username_env": "TRADO_APEX_USER",
+      "password_env": "TRADO_APEX_PASS",
+      "app_id": "FPDispatcher",
+      "app_version": "1.0",
+      "cid_env": "TRADO_APEX_CID",
+      "sec_env": "TRADO_APEX_SEC"
+    },
+    "lucid": {
+      "environnement": "demo",
+      "username_env": "TRADO_LUCID_USER",
+      "password_env": "TRADO_LUCID_PASS",
+      "app_id": "FPDispatcher",
+      "app_version": "1.0",
+      "cid_env": "TRADO_LUCID_CID",
+      "sec_env": "TRADO_LUCID_SEC"
+    },
+    "fundednext": {
+      "environnement": "demo",
+      "username_env": "TRADO_FN_USER",
+      "password_env": "TRADO_FN_PASS",
+      "app_id": "FPDispatcher",
+      "app_version": "1.0",
+      "cid_env": "TRADO_FN_CID",
+      "sec_env": "TRADO_FN_SEC"
+    }
+  },
+
+  "comptes": [
+    {
+      "id": "apex-01",
+      "firm": "apex",
+      "account_spec": "APEX-XXXXX-01",
+      "account_id": 0,
+      "enabled": true,
+      "qty": { "default": 1, "NQ": 1, "MNQ": 2 }
+    },
+    {
+      "id": "apex-02",
+      "firm": "apex",
+      "account_spec": "APEX-XXXXX-02",
+      "account_id": 0,
+      "enabled": true,
+      "qty": { "default": 1 }
+    },
+    {
+      "id": "lucid-01",
+      "firm": "lucid",
+      "account_spec": "LUCID-XXXXX-01",
+      "account_id": 0,
+      "enabled": true,
+      "qty": { "default": 1 }
+    },
+    {
+      "id": "fundednext-01",
+      "firm": "fundednext",
+      "account_spec": "FN-XXXXX-01",
+      "account_id": 0,
+      "enabled": true,
+      "qty": { "default": 1 }
+    }
+  ],
+
+  "groupes_correlation": {
+    "indices_us": ["NQ", "MNQ", "ES", "MES", "RTY", "M2K", "YM", "MYM"],
+    "metaux": ["GC", "MGC", "SI", "SIL"],
+    "energie": ["CL", "MCL", "QM", "NG", "MNG", "QG"],
+    "europe": ["FDAX", "FDXM"]
+  },
+
+  "contrats_forces": {
+    "commentaire": "optionnel : forcer l'echeance au lieu de la resolution auto (ex. roll)",
+    "NQ": null
+  },
+
+  "blackouts_news": [
+    { "debut": "2026-08-07 14:25", "fin": "2026-08-07 14:45", "motif": "NFP" }
+  ]
+}
