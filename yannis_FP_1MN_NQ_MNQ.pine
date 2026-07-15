@@ -471,6 +471,15 @@ debugRearm       = input.bool(false, 'Debug re-entrées (table échecs filtres)'
 hidefilled       = input.bool(false, 'Hide Filled', group='Conditions')
 voltresh = input.int(0, 'Volume >', group='Conditions')
 
+// Sortie « Fair price reached » : historiquement elle ferme TOUT trade dès
+// qu'une bougie ouvre hors zone FP et clôture dedans. Pour une continuation,
+// le retest de la zone juste après l'open est pourtant un comportement normal
+// (cas du 15/07 02h06 : continuation asiatique coupée au retest avant de
+// repartir dans le bon sens). Décoché : seules les réversions (dont le FP est
+// la cible) sont fermées au fair price ; les continuations gardent leur
+// SL/TP/break-even. Déclaré en dernier (indices in_N des graphiques).
+useFpCloseCont = input.bool(true, 'Sortie fair price : fermer aussi les continuations', group='Gestion trade : BE / TP / ATR', tooltip='Coché = comportement historique (toute position est fermée quand une bougie clôture dans la zone FP). Décoché = les trades de continuation (continue / crossContinue) ne sont plus fermés au retour dans la zone fair price.')
+
 // Appearance inputs
 showhighs        = true
 showlows         = true
@@ -1188,7 +1197,9 @@ closeInFP = close > lowFP and close < highFP
 openOutFP = not (open > lowFP and open < highFP)
 fairPriceCond = closeInFP and openOutFP
 
-if fairPriceCond
+// Continuation exemptée de la sortie fair price si l'option est décochée
+fpExemptCont = not useFpCloseCont and (tradeType == "continue" or tradeType == "crossContinue")
+if fairPriceCond and not fpExemptCont
     if strategy.position_size != 0
         whAlert('flatten', float(na), float(na))
     strategy.close_all("Fair price reached")
