@@ -27,7 +27,7 @@ fridayFlattenMinute = input.int(45, "Friday Flatten Minute", minval=0, maxval=59
 grpWebhook = "Webhook"
 useWebhook = input.bool(false, "Alertes webhook JSON", group=grpWebhook)
 whSecret   = input.string("CHANGE_ME", "Secret partagé", group=grpWebhook, tooltip="Doit correspondre au secret attendu par le serveur FastAPI")
-whStrat    = input.string("RSF_TD", "Identifiant stratégie", group=grpWebhook)
+whStrat    = input.string("RSF_TD_1H", "Identifiant stratégie", group=grpWebhook)
 
 whNum(float v) =>
     na(v) ? 'null' : str.tostring(math.round_to_mintick(v))
@@ -49,12 +49,8 @@ whAlert(string action, float slLvl, float tpLvl) =>
         alert(msg, alert.freq_once_per_bar)
 
 // ============================================================================
-// 1) 1H TIMEFRAME — most recent confirmed pivot high / pivot low
-//    Référence de temps passée du Daily au 1H : un pivot 1H se confirme en
-//    `pivotLen` heures (≈3 h) au lieu de 3 jours pour le daily — supprime le
-//    retard de confirmation. ta.pivothigh/pivotlow ne se mettent à jour qu'une
-//    fois le pivot réellement confirmé (pas de repaint).
-//    dPH/dPL contiennent désormais des pivots 1H (nom conservé pour simplicité).
+// 1) PIVOT REFERENCE — most recent confirmed pivot high / pivot low
+//    A/B : ligne security en "D" (daily) pour mesurer l'écart vs "60" (1H).
 // ============================================================================
 f_lastPivot() =>
     var float lastPH = na
@@ -67,12 +63,10 @@ f_lastPivot() =>
         lastPL := pl
     [lastPH, lastPL]
 
-[dPH, dPL] = request.security(syminfo.tickerid, "60", f_lastPivot(), lookahead=barmerge.lookahead_off)
+[dPH, dPL] = request.security(syminfo.tickerid, "D", f_lastPivot(), lookahead=barmerge.lookahead_off)
 
 // ============================================================================
-// 2) 1H TIMEFRAME — breakout d'un pivot 1H + rejet à la clôture de bougie
-//    Le pivot 1H (dPH/dPL ci-dessus) est confirmé ≥ pivotLen heures plus tôt ;
-//    une bougie 1H ULTÉRIEURE qui le balaie puis referme de l'autre côté = SFP.
+// 2) 1H TIMEFRAME — breakout d'un pivot + rejet à la clôture de bougie
 //    With lookahead_off, "open/high/low/close/time_close" of "60" already
 //    refer to the LAST FULLY CLOSED 1H bar as soon as it closes.
 // ============================================================================
@@ -91,46 +85,32 @@ h1_green = h1_close > h1_open
 
 // ============================================================================
 // EOD FLATTEN — day-trading only, no overnight positions.
-//    No new setup is armed at/after the flatten time, and any open position
-//    is force-closed at the flatten time.
 // ============================================================================
 newTradingDay = ta.change(time("D")) != 0
 
-// On Fridays, use the earlier Friday cutoff (close to the Globex session end)
-// instead of the regular EOD flatten time, so the position is closed before
-// the weekend gap rather than carrying over to Sunday's reopen.
 isFriday = dayofweek == dayofweek.friday
 regularFlatten = isFriday ?
      (hour > fridayFlattenHour or (hour == fridayFlattenHour and minute >= fridayFlattenMinute)) :
      (hour == flattenHour and minute >= flattenMinute)
 
-// Safety net: if a position is still open when a new trading day starts
-// (e.g. a holiday or data gap meant neither flatten condition above fired),
-// flatten it on the first bar of the new day instead of waiting further.
 eodFlatten = regularFlatten or (newTradingDay and strategy.position_size != 0)
 
 // "Fresh breakout" filter: the PREVIOUS 1H bar must have closed on the other side
-// of the pivot. This rejects setups where price has already been trading past
-// the pivot for a while (stale level) and only requires a momentary wick through
-// an old, far-away level to fire.
+// of the pivot.
 freshBreakoutBear = h1_closePrev < dPH
 freshBreakoutBull = h1_closePrev > dPL
 
-// Breakout ABOVE 1H pivot high, then close back BELOW it on a RED candle -> bearish (short) setup
+// Breakout ABOVE pivot high, then close back BELOW it on a RED candle -> bearish (short) setup
 bearishSetup = h1_newBar and not na(dPH) and h1_high > dPH and h1_close < dPH and h1_red and freshBreakoutBear and not eodFlatten
 
-// Breakout BELOW 1H pivot low, then close back ABOVE it on a GREEN candle -> bullish (long) setup
+// Breakout BELOW pivot low, then close back ABOVE it on a GREEN candle -> bullish (long) setup
 bullishSetup = h1_newBar and not na(dPL) and h1_low < dPL and h1_close > dPL and h1_green and freshBreakoutBull and not eodFlatten
 
 // ============================================================================
 // 3) PENDING SETUP STATE
-//    A valid 1H signal arms a "wait for FVG" state. The first FVG found on
-//    the 5m chart (current timeframe) in the matching direction triggers the
-//    trade decision (take it, or skip if RR < minRR). Either way the pending
-//    state is cleared after the first FVG.
 // ============================================================================
-var int   pendingDir    = 0     // 1 = waiting for bullish FVG (long), -1 = waiting for bearish FVG (short)
-var float pendingTarget = na    // opposite 1H pivot -> take-profit target
+var int   pendingDir    = 0
+var float pendingTarget = na
 
 if bearishSetup
     pendingDir    := -1
@@ -141,24 +121,18 @@ if bullishSetup
 
 // ============================================================================
 // 4) 5-MINUTE FVG DETECTION (current chart timeframe)
-//    Bullish FVG: low[0]  > high[2]  (gap up)
-//    Bearish FVG: high[0] < low[2]   (gap down)
 // ============================================================================
 bullFVG = low > high[2]
 bearFVG = high < low[2]
 
-// Most extreme price across the 3 candles forming the FVG -> used for the stop
 fvgHighestHigh = math.max(high, math.max(high[1], high[2]))
 fvgLowestLow   = math.min(low,  math.min(low[1],  low[2]))
 
-// Stop distance: ATR x multiple (current timeframe) or fixed offset
 atrVal       = ta.atr(atrLen)
 stopDistance = useATRStop ? atrVal * atrMult : stopOffset
 
 // ============================================================================
 // 5) ENTRY LOGIC — entry at close of the FVG candle
-//    Stop  = stopDistance (ATR x multiple, or fixed offset) beyond the most extreme FVG candle
-//    Target = opposite 1H pivot, only if RR >= minRR, otherwise skip trade
 // ============================================================================
 if strategy.position_size == 0 and pendingDir == 1 and bullFVG
     entryPrice = close
@@ -174,8 +148,8 @@ if strategy.position_size == 0 and pendingDir == 1 and bullFVG
         whAlert('buy', stopPrice, target)
         if not useWebhook
             alert("RSF-TD LONG @ " + str.tostring(entryPrice, format.mintick) +
-              " | SL " + str.tostring(stopPrice, format.mintick) +
-              " | TP " + str.tostring(target, format.mintick), alert.freq_once_per_bar_close)
+                  " | SL " + str.tostring(stopPrice, format.mintick) +
+                  " | TP " + str.tostring(target, format.mintick), alert.freq_once_per_bar_close)
     pendingDir := 0
 
 if strategy.position_size == 0 and pendingDir == -1 and bearFVG
@@ -192,11 +166,11 @@ if strategy.position_size == 0 and pendingDir == -1 and bearFVG
         whAlert('sell', stopPrice, target)
         if not useWebhook
             alert("RSF-TD SHORT @ " + str.tostring(entryPrice, format.mintick) +
-              " | SL " + str.tostring(stopPrice, format.mintick) +
-              " | TP " + str.tostring(target, format.mintick), alert.freq_once_per_bar_close)
+                  " | SL " + str.tostring(stopPrice, format.mintick) +
+                  " | TP " + str.tostring(target, format.mintick), alert.freq_once_per_bar_close)
     pendingDir := 0
 
-// Force-close any open position at the EOD flatten time (no overnight holding)
+// Force-close any open position at the EOD flatten time
 if strategy.position_size != 0 and eodFlatten
     whAlert('flatten', float(na), float(na))
     strategy.close_all(comment="EOD Flatten")
@@ -205,8 +179,8 @@ if strategy.position_size != 0 and eodFlatten
 // ============================================================================
 // VISUALS
 // ============================================================================
-plot(dPH, "1H Pivot High", color=color.new(color.red, 0), style=plot.style_linebr, linewidth=1)
-plot(dPL, "1H Pivot Low",  color=color.new(color.green, 0), style=plot.style_linebr, linewidth=1)
+plot(dPH, "Pivot High", color=color.new(color.red, 0), style=plot.style_linebr, linewidth=1)
+plot(dPL, "Pivot Low",  color=color.new(color.green, 0), style=plot.style_linebr, linewidth=1)
 
 plotshape(bearishSetup, title="Bearish Setup (waiting FVG)", style=shape.triangledown,
      location=location.abovebar, color=color.red, size=size.small)

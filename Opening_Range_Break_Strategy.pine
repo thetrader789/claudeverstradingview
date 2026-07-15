@@ -63,6 +63,35 @@ tpProximityTicks = input.int(10, "Tolérance TP (ticks) — clôture proche du s
 dynamicTpFollow = input.bool(false, "TP dynamique (suit les nouveaux swings formés après l'entrée)", group=grpTrade,
      tooltip="Par défaut le TP est figé au swing le plus proche connu à la bougie de cassure, même s'il est lointain — un trade peut alors courir des heures et chevaucher la session suivante. Activé : à chaque nouveau swing confirmé plus proche dans le sens du trade, la limite est déplacée dessus (elle ne peut que se rapprocher, jamais s'éloigner). Seuls comptent les swings formés APRÈS la bougie d'entrée et au-delà du prix d'entrée d'au moins la distance min. (x ATR) : un micro-swing qui vient de se faire au niveau de l'entrée n'est pas une cible, le TP initial reste le swing récent établi. Le stop (orMid figé à l'entrée) n'est jamais modifié.")
 
+// ─── Webhook : alertes JSON vers le dispatcher FastAPI (state_manager) ───────
+// Déclarés en dernier, comme tous les nouveaux inputs de ce fichier (indices
+// in_N sauvegardés sur les graphiques). Quand le webhook est actif, les
+// alertes texte historiques sont remplacées par le payload JSON — créer UNE
+// alerte TradingView « Toute fonction alert() » avec l'URL du webhook.
+grpWebhook = "Webhook"
+useWebhook = input.bool(false, "Alertes webhook JSON", group=grpWebhook)
+whSecret   = input.string("CHANGE_ME", "Secret partagé", group=grpWebhook, tooltip="Doit correspondre au secret attendu par le serveur FastAPI")
+whStrat    = input.string("ORB", "Identifiant stratégie", group=grpWebhook)
+
+whNum(float v) =>
+    na(v) ? 'null' : str.tostring(math.round_to_mintick(v))
+
+// La taille réelle par compte vient du serveur (accounts.json) ; qty=1 indicatif.
+whAlert(string action, float slLvl, float tpLvl) =>
+    if useWebhook
+        msg = '{"secret":"' + whSecret
+         + '","strategy":"' + whStrat
+         + '","symbol":"' + syminfo.root
+         + '","ticker":"' + syminfo.tickerid
+         + '","action":"' + action
+         + '","tradeType":"orb"'
+         + ',"qty":1'
+         + ',"price":' + str.tostring(math.round_to_mintick(close))
+         + ',"stopLoss":' + whNum(slLvl)
+         + ',"takeProfit":' + whNum(tpLvl)
+         + ',"time":"' + str.format_time(timenow, 'yyyy-MM-dd HH:mm:ss', 'Europe/Paris') + '"}'
+        alert(msg, alert.freq_once_per_bar)
+
 // ============================================================================
 // 1) SESSION & OPENING RANGE
 // ============================================================================
@@ -257,6 +286,7 @@ if eodFlatten
     // (positions tenues overnight, ex. long du 18 juin gardé 34h).
     strategy.cancel_all()
     if strategy.position_size != 0
+        whAlert('flatten', float(na), float(na))
         strategy.close_all(comment="Flatten fin de journée")
 
 // ============================================================================
@@ -329,9 +359,11 @@ if longBreakout and not longInvalid and not na(nearestHighAbove)
         activeSlPrice := slPrice
         entryBarIdx := bar_index
         entryPxSaved := entryPrice
-        alert("ORB LONG (marché) @ " + str.tostring(entryPrice, format.mintick) +
-              " | SL " + str.tostring(slPrice, format.mintick) +
-              " | TP (swing) " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
+        whAlert('buy', slPrice, tpPrice)
+        if not useWebhook
+            alert("ORB LONG (marché) @ " + str.tostring(entryPrice, format.mintick) +
+                  " | SL " + str.tostring(slPrice, format.mintick) +
+                  " | TP (swing) " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
 
 if shortBreakout and not shortInvalid and not na(nearestLowBelow)
     entryPrice = close
@@ -350,9 +382,11 @@ if shortBreakout and not shortInvalid and not na(nearestLowBelow)
         activeSlPrice := slPrice
         entryBarIdx := bar_index
         entryPxSaved := entryPrice
-        alert("ORB SHORT (marché) @ " + str.tostring(entryPrice, format.mintick) +
-              " | SL " + str.tostring(slPrice, format.mintick) +
-              " | TP (swing) " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
+        whAlert('sell', slPrice, tpPrice)
+        if not useWebhook
+            alert("ORB SHORT (marché) @ " + str.tostring(entryPrice, format.mintick) +
+                  " | SL " + str.tostring(slPrice, format.mintick) +
+                  " | TP (swing) " + str.tostring(tpPrice, format.mintick), alert.freq_once_per_bar_close)
 
 // ============================================================================
 // 7bis) TP DYNAMIQUE — au lieu de garder le swing connu à l'entrée (qui peut
@@ -375,6 +409,7 @@ if dynamicTpFollow and strategy.position_size != 0 and not na(activeTpPrice) and
         if not na(candidateTp) and candidateTp < activeTpPrice
             activeTpPrice := candidateTp
             strategy.exit("Sortie Long", from_entry="Long Marché", stop=activeSlPrice, limit=activeTpPrice)
+            whAlert('modify_tp', activeSlPrice, activeTpPrice)
     else
         // Short : swing bas formé après l'entrée, sous entrée - minDist,
         // plus proche que le TP courant
@@ -382,6 +417,7 @@ if dynamicTpFollow and strategy.position_size != 0 and not na(activeTpPrice) and
         if not na(candidateTp) and candidateTp > activeTpPrice
             activeTpPrice := candidateTp
             strategy.exit("Sortie Short", from_entry="Short Marché", stop=activeSlPrice, limit=activeTpPrice)
+            whAlert('modify_tp', activeSlPrice, activeTpPrice)
 
 // ============================================================================
 // 8) SORTIE ANTICIPÉE — clôture de bougie à moins de X ticks du swing cible :
@@ -393,6 +429,7 @@ tpTolerance = tpProximityTicks * syminfo.mintick
 longNearTp  = tpProximityTicks > 0 and strategy.position_size > 0 and not na(activeTpPrice) and close >= activeTpPrice - tpTolerance
 shortNearTp = tpProximityTicks > 0 and strategy.position_size < 0 and not na(activeTpPrice) and close <= activeTpPrice + tpTolerance
 if longNearTp or shortNearTp
+    whAlert('flatten', float(na), float(na))
     strategy.cancel_all()
     strategy.close_all(comment="TP proximité swing")
     activeTpPrice := na

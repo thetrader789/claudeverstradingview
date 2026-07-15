@@ -130,6 +130,18 @@ async def _modify_stop(payload: dict) -> dict:
     return {"statut": "exécuté" if ok else "ignoré", "compte": compte["id"]}
 
 
+async def _modify_tp(payload: dict) -> dict:
+    compte, pos = sm.compte_en_position(payload["symbol"])
+    if compte is None or payload.get("takeProfit") is None:
+        return {"statut": "ignoré", "raison": "pas de position ou pas de TP"}
+    session = hub.session(compte["firm"])
+    ok = await session.deplacer_tp(
+        hub.client, compte, pos["contrat"], float(payload["takeProfit"]))
+    log.info("MODIFY_TP %s → %.2f (%s)", compte["id"],
+             float(payload["takeProfit"]), "modifié" if ok else "TP introuvable")
+    return {"statut": "exécuté" if ok else "ignoré", "compte": compte["id"]}
+
+
 async def _flatten(payload: dict) -> dict:
     compte, pos = sm.compte_en_position(payload["symbol"])
     if compte is None:
@@ -146,6 +158,7 @@ HANDLERS = {
     "sell": _entree,
     "breakeven": _breakeven,
     "modify_stop": _modify_stop,
+    "modify_tp": _modify_tp,
     "flatten": _flatten,
 }
 

@@ -1,0 +1,248 @@
+//@version=6
+strategy("Forex 1H – Trendline Breakout", overlay=true,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=2,
+     commission_type=strategy.commission.percent, commission_value=0.01,
+     initial_capital=10000, calc_on_every_tick=true)
+
+import TradingView/ta/7
+
+// ══════════════════════════════════════════════════════════════
+// INPUTS
+// ══════════════════════════════════════════════════════════════
+pivotLen    = input.int(10,   "Pivot length (barres de chaque côté)", minval=3, maxval=50,  group="Trendline",
+     tooltip="10 = swing sur ±10 barres. Plus grand = pivots plus significatifs.")
+minSpanBars = input.int(240,  "Span mini entre 2 pivots (barres 1H)", minval=24,            group="Trendline",
+     tooltip="1H forex : 24 barres = 1 jour. 10 jours = 240 barres (défaut).")
+maxPivots   = input.int(10,   "Nb pivots mémorisés",  minval=4, maxval=30,                  group="Trendline")
+maxBreakPct = input.float(3.0,"Breakout max (%)",     minval=0.1, step=0.5,                 group="Signal",
+     tooltip="Cassure ignorée si close est déjà à plus de X% au-delà de la trendline.")
+rvolLen     = input.int(50,   "RVOL lookback (barres)",          minval=1,                  group="Volume")
+rvolAnchor  = input.timeframe("1D", "RVOL anchor TF",                                       group="Volume")
+volMult     = input.float(2.0,"Seuil RVOL minimum (x)",         minval=0.5, step=0.1,       group="Volume")
+atrLen      = input.int(14,   "ATR length",                      minval=1,                  group="Risque")
+rrRatio     = input.float(2.0,"Risk : Reward",                   minval=0.5, step=0.5,      group="Risque")
+
+// ─── Webhook : alertes JSON vers le dispatcher FastAPI (state_manager) ───────
+// Déclarés en dernier pour ne pas décaler les indices in_N sauvegardés.
+// NB : stratégie forex — le dispatcher actuel exécute sur Tradovate (futures) ;
+// prévoir un backend forex côté serveur avant d'activer en réel.
+useWebhook = input.bool(false, "Alertes webhook JSON", group="Webhook")
+whSecret   = input.string("CHANGE_ME", "Secret partagé", group="Webhook", tooltip="Doit correspondre au secret attendu par le serveur FastAPI")
+whStrat    = input.string("FOREX_1H_TL", "Identifiant stratégie", group="Webhook")
+
+whNum(float v) =>
+    na(v) ? 'null' : str.tostring(math.round_to_mintick(v))
+
+// La taille réelle par compte vient du serveur (accounts.json) ; qty=1 indicatif.
+whAlert(string action, float slLvl, float tpLvl) =>
+    if useWebhook
+        msg = '{"secret":"' + whSecret
+         + '","strategy":"' + whStrat
+         + '","symbol":"' + syminfo.root
+         + '","ticker":"' + syminfo.tickerid
+         + '","action":"' + action
+         + '","tradeType":"trendline"'
+         + ',"qty":1'
+         + ',"price":' + str.tostring(math.round_to_mintick(close))
+         + ',"stopLoss":' + whNum(slLvl)
+         + ',"takeProfit":' + whNum(tpLvl)
+         + ',"time":"' + str.format_time(timenow, 'yyyy-MM-dd HH:mm:ss', 'Europe/Paris') + '"}'
+        alert(msg, alert.freq_once_per_bar)
+
+// ══════════════════════════════════════════════════════════════
+// ATR + RVOL
+// ══════════════════════════════════════════════════════════════
+atr = ta.atr(atrLen)
+
+[curVol, pastVol, _] = ta.relativeVolume(rvolLen, rvolAnchor, true, true)
+relVol  = not na(curVol) and not na(pastVol) and pastVol > 0 ? curVol / pastVol : na
+highVol = not na(relVol) and relVol >= volMult
+rvolOk  = highVol
+
+// ══════════════════════════════════════════════════════════════
+// TRENDLINE DESCENDANTE — swing HIGHS → signal LONG
+//   Relie les pivot highs en descente.
+//   Algorithme : paire la moins pentue (slope le plus proche de 0
+//   par en-dessous) avec span ≥ minSpanBars.
+// ══════════════════════════════════════════════════════════════
+ph = ta.pivothigh(high, pivotLen, pivotLen)
+
+var float[] ph_prices = array.new_float(0)
+var int[]   ph_bars   = array.new_int(0)
+
+if not na(ph)
+    array.unshift(ph_prices, ph)
+    array.unshift(ph_bars,   bar_index - pivotLen)
+    if array.size(ph_prices) > maxPivots
+        array.pop(ph_prices)
+        array.pop(ph_bars)
+
+float descSlope  = na
+float descAnchorP = na
+int   descAnchorB = na
+
+int nH = array.size(ph_prices)
+if nH >= 2
+    for i = 0 to nH - 2
+        for j = i + 1 to nH - 1
+            float p_new = array.get(ph_prices, i)   // pivot récent (i=0 = le plus récent)
+            int   b_new = array.get(ph_bars,   i)
+            float p_old = array.get(ph_prices, j)   // pivot ancien
+            int   b_old = array.get(ph_bars,   j)
+            int   span  = b_new - b_old
+            // Descendante : high ancien > high récent
+            if p_old > p_new and span >= minSpanBars
+                float s = (p_new - p_old) / float(span)   // slope < 0
+                if na(descSlope) or s > descSlope          // le moins négatif = le plus plat
+                    descSlope   := s
+                    descAnchorP := p_new
+                    descAnchorB := b_new
+
+float tlDesc = not na(descSlope) ? descAnchorP + descSlope * float(bar_index - descAnchorB) : na
+bool  descOk = not na(descSlope) and descSlope < 0
+
+// ══════════════════════════════════════════════════════════════
+// TRENDLINE MONTANTE — swing LOWS → signal SHORT
+//   Relie les pivot lows en montée.
+//   Algorithme : paire la moins pentue (slope le plus proche de 0
+//   par en-dessus) avec span ≥ minSpanBars.
+// ══════════════════════════════════════════════════════════════
+pl = ta.pivotlow(low, pivotLen, pivotLen)
+
+var float[] pl_prices = array.new_float(0)
+var int[]   pl_bars   = array.new_int(0)
+
+if not na(pl)
+    array.unshift(pl_prices, pl)
+    array.unshift(pl_bars,   bar_index - pivotLen)
+    if array.size(pl_prices) > maxPivots
+        array.pop(pl_prices)
+        array.pop(pl_bars)
+
+float ascSlope  = na
+float ascAnchorP = na
+int   ascAnchorB = na
+
+int nL = array.size(pl_prices)
+if nL >= 2
+    for i = 0 to nL - 2
+        for j = i + 1 to nL - 1
+            float p_new = array.get(pl_prices, i)   // pivot récent
+            int   b_new = array.get(pl_bars,   i)
+            float p_old = array.get(pl_prices, j)   // pivot ancien
+            int   b_old = array.get(pl_bars,   j)
+            int   span  = b_new - b_old
+            // Montante : low ancien < low récent
+            if p_old < p_new and span >= minSpanBars
+                float s = (p_new - p_old) / float(span)   // slope > 0
+                if na(ascSlope) or s < ascSlope            // le moins positif = le plus plat
+                    ascSlope   := s
+                    ascAnchorP := p_new
+                    ascAnchorB := b_new
+
+float tlAsc = not na(ascSlope) ? ascAnchorP + ascSlope * float(bar_index - ascAnchorB) : na
+bool  ascOk = not na(ascSlope) and ascSlope > 0
+
+// ══════════════════════════════════════════════════════════════
+// SIGNAUX
+//   LONG  : close casse AU-DESSUS de la trendline DESCENDANTE
+//   SHORT : close casse EN-DESSOUS de la trendline MONTANTE
+//   Dans les deux cas : RVOL ≥ seuil + pas déjà en position
+// ══════════════════════════════════════════════════════════════
+noPosition = strategy.position_size == 0
+
+longBreak  = descOk and not na(tlDesc) and close > tlDesc
+longNotFar = close <= tlDesc * (1.0 + maxBreakPct / 100.0)
+longSignal = longBreak and longNotFar and highVol and noPosition
+
+shortBreak  = ascOk and not na(tlAsc) and close < tlAsc
+shortNotFar = close >= tlAsc * (1.0 - maxBreakPct / 100.0)
+shortSignal = shortBreak and shortNotFar and highVol and noPosition
+
+// ══════════════════════════════════════════════════════════════
+// ENTRÉES / SORTIES
+//   SL LONG  = intersection trendline descendante − ATR
+//   SL SHORT = intersection trendline montante    + ATR
+//   TP       = close ± ATR × R:R
+// ══════════════════════════════════════════════════════════════
+if longSignal
+    sl_l = tlDesc - atr
+    tp_l = close + atr * rrRatio
+    strategy.entry("Long",  strategy.long,  comment="BRK↑")
+    strategy.exit("SL/TP L", "Long",  stop=sl_l, limit=tp_l)
+    whAlert('buy', sl_l, tp_l)
+
+if shortSignal
+    sl_s = tlAsc + atr
+    tp_s = close - atr * rrRatio
+    strategy.entry("Short", strategy.short, comment="BRK↓")
+    strategy.exit("SL/TP S", "Short", stop=sl_s, limit=tp_s)
+    whAlert('sell', sl_s, tp_s)
+
+// ══════════════════════════════════════════════════════════════
+// PLOTS
+// ══════════════════════════════════════════════════════════════
+plot(tlDesc, "TL Descendante (highs)", color=descOk ? color.red   : color.new(color.gray, 80), linewidth=2)
+plot(tlAsc,  "TL Montante (lows)",    color=ascOk  ? color.green : color.new(color.gray, 80), linewidth=2)
+
+// Marqueurs de signal
+plotshape(longSignal,  "Long",  shape.triangleup,   location.belowbar, color=color.new(color.lime, 0),   size=size.small)
+plotshape(shortSignal, "Short", shape.triangledown, location.abovebar, color=color.new(color.red,  0),   size=size.small)
+
+// Pivots (affichés avec décalage car confirmés après pivotLen barres)
+plotshape(not na(ph), "Pivot High", shape.xcross, location.abovebar, color=color.new(color.red,   30), size=size.tiny, offset=-pivotLen)
+plotshape(not na(pl), "Pivot Low",  shape.xcross, location.belowbar, color=color.new(color.green, 30), size=size.tiny, offset=-pivotLen)
+
+bgcolor(highVol ? color.new(color.green, 80) : na, title="RVOL élevé")
+
+// ══════════════════════════════════════════════════════════════
+// LABEL RVOL + ATR (dernière bougie)
+// ══════════════════════════════════════════════════════════════
+var label infoLbl = na
+
+if barstate.islast
+    label.delete(infoLbl)
+    rvolStr  = not na(relVol) ? str.tostring(relVol, "#.##") + "x" : "NA"
+    atrStr   = str.tostring(atr, "#.#####")
+    lblTxt   = "RVOL " + rvolStr + "\nATR  " + atrStr
+    lblColor = rvolOk ? color.new(color.green, 20) : color.new(color.red, 20)
+    infoLbl  := label.new(bar_index + 2, high, lblTxt,
+         xloc=xloc.bar_index, yloc=yloc.price,
+         color=lblColor, textcolor=color.white,
+         style=label.style_label_left, size=size.normal)
+
+// ══════════════════════════════════════════════════════════════
+// TABLE DE BORD (coin haut-droit)
+// ══════════════════════════════════════════════════════════════
+var table dash = table.new(position.top_right, 2, 6,
+     bgcolor=color.new(color.black, 50), border_color=color.new(color.gray, 30), border_width=1)
+
+_hdr(col, row, txt) =>
+    table.cell(dash, col, row, txt, bgcolor=color.new(color.navy, 10),
+         text_color=color.white, text_size=size.normal)
+
+_val(col, row, txt, bg) =>
+    table.cell(dash, col, row, txt, bgcolor=bg,
+         text_color=color.white, text_size=size.normal)
+
+if barstate.islast
+    _hdr(0, 0, "RVOL")
+    volBg = rvolOk ? color.new(color.green, 25) : color.new(color.red, 25)
+    _val(1, 0, not na(relVol) ? str.tostring(relVol, "#.##") + "x" : "—", volBg)
+
+    _hdr(0, 1, "ATR")
+    _val(1, 1, str.tostring(atr, "#.#####"), color.new(color.gray, 40))
+
+    _hdr(0, 2, "TL Desc")
+    _val(1, 2, not na(tlDesc) ? str.tostring(tlDesc, "#.####") : "—", color.new(color.gray, 40))
+
+    _hdr(0, 3, "TL Asc")
+    _val(1, 3, not na(tlAsc) ? str.tostring(tlAsc, "#.####") : "—", color.new(color.gray, 40))
+
+    _hdr(0, 4, "Position")
+    posBg  = strategy.position_size != 0 ? color.new(color.blue, 25) : color.new(color.gray, 55)
+    posStr = strategy.position_size > 0 ? "LONG ✓" : strategy.position_size < 0 ? "SHORT ✓" : "—"
+    _val(1, 4, posStr, posBg)
+
+    _hdr(0, 5, "R:R")
+    _val(1, 5, str.tostring(rrRatio, "#.#") + ":1", color.new(color.gray, 40))

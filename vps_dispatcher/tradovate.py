@@ -172,6 +172,24 @@ class FirmSession:
             return True
         return False
 
+    async def deplacer_tp(self, client, compte: dict, contrat: str,
+                          nouveau_tp: float) -> bool:
+        """Retrouve l'ordre limite (TP) actif du compte et le déplace."""
+        for o in await self._ordres_actifs(client, compte, contrat):
+            version = await self._versions_ordre(client, o["id"])
+            if version.get("orderType") != "Limit":
+                continue
+            body = {
+                "orderId": o["id"],
+                "orderQty": version.get("orderQty", 1),
+                "orderType": "Limit",
+                "price": nouveau_tp,
+                "isAutomated": True,
+            }
+            await self._post(client, "/order/modifyorder", body)
+            return True
+        return False
+
     async def flatten(self, client, compte: dict, contrat: str):
         """Annule les brackets restants PUIS liquide la position.
 
