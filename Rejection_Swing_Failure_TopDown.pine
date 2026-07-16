@@ -6,7 +6,8 @@ strategy("Rejection Swing Failure — Top Down (1H ref)", shorttitle="RSF-TD 1H"
 // ============================================================================
 // INPUTS
 // ============================================================================
-pivotLen   = input.int(3, "Pivot Lookback (bars each side, 1H)", minval=1)
+pivotLen   = input.int(3, "Pivot Lookback (obsolète, non utilisé)", minval=1,
+     tooltip="Conservé uniquement pour ne pas décaler les indices in_N sauvegardés sur les graphiques. Les swings 1H utilisent désormais les longueurs gauche/droite du groupe 'Swings 1H (liquidité)'.")
 useATRStop = input.bool(true, "Use ATR-based stop", tooltip="If enabled, stop = ATR x multiple beyond the FVG extreme. If disabled, the fixed offset below is used.")
 stopOffset = input.float(0.75, "Fixed Stop Offset beyond FVG extreme (points)", minval=0.0, step=0.25,
      tooltip="3 ticks = 0.75 on NQ. Used only when 'Use ATR-based stop' is OFF.")
@@ -29,6 +30,25 @@ useWebhook = input.bool(false, "Alertes webhook JSON", group=grpWebhook)
 whSecret   = input.string("CHANGE_ME", "Secret partagé", group=grpWebhook, tooltip="Doit correspondre au secret attendu par le serveur FastAPI")
 whStrat    = input.string("RSF_TD", "Identifiant stratégie", group=grpWebhook)
 
+// ─── TP structurel : liquidité 1H la plus proche ────────────────────────────
+// Déclarés en dernier, comme tous les nouveaux inputs (indices in_N sauvegardés
+// sur les graphiques).
+grpTP = "Take Profit"
+useSwingTP = input.bool(true, "TP = liquidité 1H non mitigée la plus proche au-delà de l'entrée", group=grpTP,
+     tooltip="TP posé sur le swing 1H NON MITIGÉ (jamais retouché par le prix) le plus proche au-delà du prix d'entrée dans le sens du trade — de la liquidité encore en place, pas un niveau déjà consommé. S'il n'en existe aucun, pas de trade. Désactivé : TP = liquidité opposée connue au moment du setup (comportement précédent).")
+maxSwingKeep = input.int(30, "Swings 1H mémorisés (par côté)", minval=5, group=grpTP,
+     tooltip="Taille de l'historique de niveaux de liquidité 1H non mitigés gardé en mémoire (les plus anciens sont oubliés au-delà).")
+
+// ─── Swings 1H façon « Swing Points and Liquidity » (Leviathan) ──────────────
+// Un swing point n'est de la liquidité QUE tant qu'il n'a pas été rempli :
+// dès qu'une bougie 1H traverse le niveau, il est retiré de la mémoire
+// (extend until fill). Pivots asymétriques comme dans le script d'origine.
+grpSwing = "Swings 1H (liquidité)"
+swingSizeL = input.int(15, "Barres à GAUCHE du swing (1H)", minval=1, group=grpSwing,
+     tooltip="Nombre de bougies 1H plus basses (pour un swing high) requises à gauche du pivot. Défaut 15, comme le script Leviathan.")
+swingSizeR = input.int(10, "Barres à DROITE du swing (1H)", minval=1, group=grpSwing,
+     tooltip="Nombre de bougies 1H requises à droite pour CONFIRMER le pivot. 10 = défaut Leviathan (confirmation 10 h après l'extrême). Testé le 16/07 sur la fenêtre juin-juillet : R=10 → 8 trades, R=5 → 1, R=8 → 0 — paramètre très sensible, à valider sur un historique long.")
+
 whNum(float v) =>
     na(v) ? 'null' : str.tostring(math.round_to_mintick(v))
 
@@ -49,30 +69,7 @@ whAlert(string action, float slLvl, float tpLvl) =>
         alert(msg, alert.freq_once_per_bar)
 
 // ============================================================================
-// 1) 1H TIMEFRAME — most recent confirmed pivot high / pivot low
-//    Référence de temps passée du Daily au 1H : un pivot 1H se confirme en
-//    `pivotLen` heures (≈3 h) au lieu de 3 jours pour le daily — supprime le
-//    retard de confirmation. ta.pivothigh/pivotlow ne se mettent à jour qu'une
-//    fois le pivot réellement confirmé (pas de repaint).
-//    dPH/dPL contiennent désormais des pivots 1H (nom conservé pour simplicité).
-// ============================================================================
-f_lastPivot() =>
-    var float lastPH = na
-    var float lastPL = na
-    ph = ta.pivothigh(high, pivotLen, pivotLen)
-    pl = ta.pivotlow(low, pivotLen, pivotLen)
-    if not na(ph)
-        lastPH := ph
-    if not na(pl)
-        lastPL := pl
-    [lastPH, lastPL]
-
-[dPH, dPL] = request.security(syminfo.tickerid, "60", f_lastPivot(), lookahead=barmerge.lookahead_off)
-
-// ============================================================================
-// 2) 1H TIMEFRAME — breakout d'un pivot 1H + rejet à la clôture de bougie
-//    Le pivot 1H (dPH/dPL ci-dessus) est confirmé ≥ pivotLen heures plus tôt ;
-//    une bougie 1H ULTÉRIEURE qui le balaie puis referme de l'autre côté = SFP.
+// 1) DONNÉES 1H — dernière bougie 1H entièrement clôturée
 //    With lookahead_off, "open/high/low/close/time_close" of "60" already
 //    refer to the LAST FULLY CLOSED 1H bar as soon as it closes.
 // ============================================================================
@@ -88,6 +85,59 @@ h1_newBar = ta.change(h1_timeClose) != 0
 
 h1_red   = h1_close < h1_open
 h1_green = h1_close > h1_open
+
+// ============================================================================
+// 2) SWING POINTS 1H + LIQUIDITÉ (logique « Swing Points and Liquidity »,
+//    Leviathan) — pivots asymétriques L/R confirmés sans repaint ; chaque
+//    swing confirmé devient un niveau de liquidité mémorisé JUSQU'À CE QUE le
+//    prix le traverse (fill) : une bougie 1H dont le high atteint un swing
+//    high (resp. low ≤ swing low) consomme le niveau, qui est retiré.
+//    L'évaluation se fait à la clôture de chaque bougie 1H.
+// ============================================================================
+f_swings() =>
+    ph = ta.pivothigh(high, swingSizeL, swingSizeR)
+    pl = ta.pivotlow(low,  swingSizeL, swingSizeR)
+    [ph, pl]
+
+[h1PH, h1PL] = request.security(syminfo.tickerid, "60", f_swings(), lookahead=barmerge.lookahead_off)
+
+var array<float> liqHighs = array.new_float()
+var array<float> liqLows  = array.new_float()
+
+// (a) Nouveau pivot 1H confirmé sur la bougie 1H qui vient de clôturer → empilé
+if h1_newBar and not na(h1PH)
+    array.push(liqHighs, h1PH)
+    if array.size(liqHighs) > maxSwingKeep
+        array.shift(liqHighs)
+if h1_newBar and not na(h1PL)
+    array.push(liqLows, h1PL)
+    if array.size(liqLows) > maxSwingKeep
+        array.shift(liqLows)
+
+// Niveau de liquidité NON MITIGÉ le plus proche au-dessus / en-dessous d'un prix.
+nearestSwingAbove(float level) =>
+    float nearest = na
+    if array.size(liqHighs) > 0
+        for i = 0 to array.size(liqHighs) - 1
+            p = array.get(liqHighs, i)
+            if p > level and (na(nearest) or p < nearest)
+                nearest := p
+    nearest
+
+nearestSwingBelow(float level) =>
+    float nearest = na
+    if array.size(liqLows) > 0
+        for i = 0 to array.size(liqLows) - 1
+            p = array.get(liqLows, i)
+            if p < level and (na(nearest) or p > nearest)
+                nearest := p
+    nearest
+
+// (b) Référence du setup : liquidité la plus proche au-delà de la clôture 1H
+//     PRÉCÉDENTE — le niveau était donc encore intact avant cette bougie
+//     (l'ancien filtre « fresh breakout » est de fait intégré).
+nearestLiqHigh = h1_newBar ? nearestSwingAbove(h1_closePrev) : na
+nearestLiqLow  = h1_newBar ? nearestSwingBelow(h1_closePrev) : na
 
 // ============================================================================
 // EOD FLATTEN — day-trading only, no overnight positions.
@@ -109,38 +159,49 @@ regularFlatten = isFriday ?
 // flatten it on the first bar of the new day instead of waiting further.
 eodFlatten = regularFlatten or (newTradingDay and strategy.position_size != 0)
 
-// "Fresh breakout" filter: the PREVIOUS 1H bar must have closed on the other side
-// of the pivot. This rejects setups where price has already been trading past
-// the pivot for a while (stale level) and only requires a momentary wick through
-// an old, far-away level to fire.
-freshBreakoutBear = h1_closePrev < dPH
-freshBreakoutBull = h1_closePrev > dPL
+// ============================================================================
+// 3) SETUP — REJET AU SWING 1H NON MITIGÉ LE PLUS PROCHE
+//    La bougie 1H balaie la liquidité la plus proche (high au-delà du swing
+//    high intact le plus proche) puis REFERME de l'autre côté = rejet / SFP.
+//    Si elle clôture au-delà du niveau (acceptation), pas de setup — et le
+//    niveau est de toute façon consommé par l'étape (c) ci-dessous.
+// ============================================================================
+bearishSetup = h1_newBar and not na(nearestLiqHigh) and h1_high > nearestLiqHigh and h1_close < nearestLiqHigh and h1_red and not eodFlatten
+bullishSetup = h1_newBar and not na(nearestLiqLow)  and h1_low  < nearestLiqLow  and h1_close > nearestLiqLow  and h1_green and not eodFlatten
 
-// Breakout ABOVE 1H pivot high, then close back BELOW it on a RED candle -> bearish (short) setup
-bearishSetup = h1_newBar and not na(dPH) and h1_high > dPH and h1_close < dPH and h1_red and freshBreakoutBear and not eodFlatten
-
-// Breakout BELOW 1H pivot low, then close back ABOVE it on a GREEN candle -> bullish (long) setup
-bullishSetup = h1_newBar and not na(dPL) and h1_low < dPL and h1_close > dPL and h1_green and freshBreakoutBull and not eodFlatten
+// (c) Mitigation « extend until fill » : tout niveau traversé par la bougie 1H
+//     qui vient de clôturer est consommé — balayé-rejeté ou accepté, sa
+//     liquidité est prise, il ne peut plus servir ni de setup ni de TP.
+//     (Après la détection du setup, qui a besoin du niveau encore présent.)
+if h1_newBar
+    if array.size(liqHighs) > 0
+        for i = array.size(liqHighs) - 1 to 0
+            if h1_high >= array.get(liqHighs, i)
+                array.remove(liqHighs, i)
+    if array.size(liqLows) > 0
+        for i = array.size(liqLows) - 1 to 0
+            if h1_low <= array.get(liqLows, i)
+                array.remove(liqLows, i)
 
 // ============================================================================
-// 3) PENDING SETUP STATE
+// 4) PENDING SETUP STATE
 //    A valid 1H signal arms a "wait for FVG" state. The first FVG found on
 //    the 5m chart (current timeframe) in the matching direction triggers the
 //    trade decision (take it, or skip if RR < minRR). Either way the pending
 //    state is cleared after the first FVG.
 // ============================================================================
 var int   pendingDir    = 0     // 1 = waiting for bullish FVG (long), -1 = waiting for bearish FVG (short)
-var float pendingTarget = na    // opposite 1H pivot -> take-profit target
+var float pendingTarget = na    // liquidité opposée connue au moment du setup (TP historique)
 
 if bearishSetup
     pendingDir    := -1
-    pendingTarget := dPL
+    pendingTarget := nearestLiqLow
 if bullishSetup
     pendingDir    := 1
-    pendingTarget := dPH
+    pendingTarget := nearestLiqHigh
 
 // ============================================================================
-// 4) 5-MINUTE FVG DETECTION (current chart timeframe)
+// 5) 5-MINUTE FVG DETECTION (current chart timeframe)
 //    Bullish FVG: low[0]  > high[2]  (gap up)
 //    Bearish FVG: high[0] < low[2]   (gap down)
 // ============================================================================
@@ -156,14 +217,18 @@ atrVal       = ta.atr(atrLen)
 stopDistance = useATRStop ? atrVal * atrMult : stopOffset
 
 // ============================================================================
-// 5) ENTRY LOGIC — entry at close of the FVG candle
+// 6) ENTRY LOGIC — entry at close of the FVG candle
 //    Stop  = stopDistance (ATR x multiple, or fixed offset) beyond the most extreme FVG candle
-//    Target = opposite 1H pivot, only if RR >= minRR, otherwise skip trade
+//    Target (useSwingTP) = liquidité 1H NON MITIGÉE la plus proche au-delà de
+//    l'entrée dans le sens du trade ; sinon liquidité opposée figée au setup.
+//    Trade pris seulement si RR >= minRR.
 // ============================================================================
+var float activeTp = na
+
 if strategy.position_size == 0 and pendingDir == 1 and bullFVG
     entryPrice = close
     stopPrice  = fvgLowestLow - stopDistance
-    target     = pendingTarget
+    target     = useSwingTP ? nearestSwingAbove(entryPrice) : pendingTarget
     risk       = entryPrice - stopPrice
     reward     = target - entryPrice
     rr         = risk > 0 ? reward / risk : na
@@ -171,6 +236,7 @@ if strategy.position_size == 0 and pendingDir == 1 and bullFVG
     if risk > 0 and not na(target) and rr >= minRR
         strategy.entry("Long", strategy.long, comment="RSF Long")
         strategy.exit("Long Exit", from_entry="Long", stop=stopPrice, limit=target)
+        activeTp := target
         whAlert('buy', stopPrice, target)
         if not useWebhook
             alert("RSF-TD LONG @ " + str.tostring(entryPrice, format.mintick) +
@@ -181,7 +247,7 @@ if strategy.position_size == 0 and pendingDir == 1 and bullFVG
 if strategy.position_size == 0 and pendingDir == -1 and bearFVG
     entryPrice = close
     stopPrice  = fvgHighestHigh + stopDistance
-    target     = pendingTarget
+    target     = useSwingTP ? nearestSwingBelow(entryPrice) : pendingTarget
     risk       = stopPrice - entryPrice
     reward     = entryPrice - target
     rr         = risk > 0 ? reward / risk : na
@@ -189,6 +255,7 @@ if strategy.position_size == 0 and pendingDir == -1 and bearFVG
     if risk > 0 and not na(target) and rr >= minRR
         strategy.entry("Short", strategy.short, comment="RSF Short")
         strategy.exit("Short Exit", from_entry="Short", stop=stopPrice, limit=target)
+        activeTp := target
         whAlert('sell', stopPrice, target)
         if not useWebhook
             alert("RSF-TD SHORT @ " + str.tostring(entryPrice, format.mintick) +
@@ -202,11 +269,23 @@ if strategy.position_size != 0 and eodFlatten
     strategy.close_all(comment="EOD Flatten")
     pendingDir := 0
 
+// Trade terminé → on oublie le TP actif (transition position ouverte → flat,
+// pas "== 0" brut : sur la bougie d'entrée, position_size vaut encore 0 et
+// l'affectation faite juste au-dessus serait effacée).
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    activeTp := na
+
 // ============================================================================
-// VISUALS
+// VISUALS — liquidité 1H intacte la plus proche de part et d'autre du prix
 // ============================================================================
-plot(dPH, "1H Pivot High", color=color.new(color.red, 0), style=plot.style_linebr, linewidth=1)
-plot(dPL, "1H Pivot Low",  color=color.new(color.green, 0), style=plot.style_linebr, linewidth=1)
+liqHighDisp = nearestSwingAbove(close)
+liqLowDisp  = nearestSwingBelow(close)
+plot(liqHighDisp, "Liquidité 1H au-dessus", color=color.new(color.red, 0), style=plot.style_linebr, linewidth=1)
+plot(liqLowDisp,  "Liquidité 1H en-dessous", color=color.new(color.green, 0), style=plot.style_linebr, linewidth=1)
+
+// TP actif (liquidité 1H visée) pendant le trade
+plot(strategy.position_size != 0 ? activeTp : na, "TP actif (liquidité 1H)",
+     color=color.new(color.orange, 0), style=plot.style_linebr, linewidth=1)
 
 plotshape(bearishSetup, title="Bearish Setup (waiting FVG)", style=shape.triangledown,
      location=location.abovebar, color=color.red, size=size.small)
