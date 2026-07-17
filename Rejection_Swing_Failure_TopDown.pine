@@ -14,12 +14,12 @@ stopOffset = input.float(0.75, "Fixed Stop Offset beyond FVG extreme (points)", 
 atrLen     = input.int(14, "ATR Length", minval=1)
 atrMult    = input.float(1.5, "ATR Multiple for Stop", minval=0.1, step=0.1)
 minRR      = input.float(2.0, "Minimum Reward:Risk", minval=0.1, step=0.1)
-flattenHour   = input.int(21, "EOD Flatten Hour (exchange time)", minval=0, maxval=23,
-     tooltip="No overnight positions: any open trade is closed at this time, and no new setups are armed after it.")
-flattenMinute = input.int(45, "EOD Flatten Minute", minval=0, maxval=59)
-fridayFlattenHour   = input.int(15, "Friday Flatten Hour (exchange time)", minval=0, maxval=23,
-     tooltip="The Globex electronic session for NQ closes around 16:00 exchange time on Fridays, before the regular EOD flatten time would ever trigger. Use this earlier cutoff on Fridays so positions are closed before the weekend instead of carrying over.")
-fridayFlattenMinute = input.int(45, "Friday Flatten Minute", minval=0, maxval=59)
+flattenHour   = input.int(21, "EOD Flatten Hour (obsolète, non utilisé)", minval=0, maxval=23,
+     tooltip="Conservé uniquement pour ne pas décaler les indices in_N sauvegardés sur les graphiques. La coupure fin de journée utilise désormais le groupe 'Fin de journée (prop firm, Europe/Paris)' : l'ancien 21h45 « exchange time » tombait en réalité à 4h45 du matin heure de Paris (fuseau America/Chicago du CME).")
+flattenMinute = input.int(45, "EOD Flatten Minute (obsolète, non utilisé)", minval=0, maxval=59)
+fridayFlattenHour   = input.int(15, "Friday Flatten Hour (obsolète, non utilisé)", minval=0, maxval=23,
+     tooltip="Conservé pour les indices in_N. La coupure Paris quotidienne (21h30 par défaut) ferme aussi avant le week-end : le Globex clôture le vendredi à 22h00 heure de Paris.")
+fridayFlattenMinute = input.int(45, "Friday Flatten Minute (obsolète, non utilisé)", minval=0, maxval=59)
 
 // ─── Webhook : alertes JSON vers le dispatcher FastAPI (state_manager) ───────
 // Déclarés en dernier pour ne pas décaler les indices in_N sauvegardés sur les
@@ -44,10 +44,22 @@ maxSwingKeep = input.int(30, "Swings 1H mémorisés (par côté)", minval=5, gro
 // dès qu'une bougie 1H traverse le niveau, il est retiré de la mémoire
 // (extend until fill). Pivots asymétriques comme dans le script d'origine.
 grpSwing = "Swings 1H (liquidité)"
-swingSizeL = input.int(15, "Barres à GAUCHE du swing (1H)", minval=1, group=grpSwing,
+swingSizeL = input.int(12, "Barres à GAUCHE du swing (1H)", minval=1, group=grpSwing,
      tooltip="Nombre de bougies 1H plus basses (pour un swing high) requises à gauche du pivot. Défaut 15, comme le script Leviathan.")
 swingSizeR = input.int(10, "Barres à DROITE du swing (1H)", minval=1, group=grpSwing,
      tooltip="Nombre de bougies 1H requises à droite pour CONFIRMER le pivot. 10 = défaut Leviathan (confirmation 10 h après l'extrême). Testé le 16/07 sur la fenêtre juin-juillet : R=10 → 8 trades, R=5 → 1, R=8 → 0 — paramètre très sensible, à valider sur un historique long.")
+
+// ─── Fin de journée prop firm (Europe/Paris) ─────────────────────────────────
+// Déclarés en dernier (indices in_N). Règle prop firm : aucune entrée à partir
+// de l'heure de coupure et aucune position conservée (flatten forcé). La
+// fenêtre de coupure se termine à la réouverture Globex (23h00 Paris) : la
+// séance qui démarre alors appartient au jour de trading suivant.
+grpEOD = "Fin de journée (prop firm, Europe/Paris)"
+eodCutoffHour   = input.int(21, "Heure de coupure (Paris)", minval=0, maxval=23, group=grpEOD,
+     tooltip="À partir de cette heure (heure de Paris, DST géré, indépendante du fuseau de l'exchange) : plus aucun setup armé, plus aucune entrée FVG, et toute position encore ouverte est fermée immédiatement.")
+eodCutoffMinute = input.int(30, "Minute de coupure", minval=0, maxval=59, group=grpEOD)
+eodReopenHour   = input.int(23, "Réouverture Globex (Paris)", minval=0, maxval=23, group=grpEOD,
+     tooltip="Fin de la fenêtre de coupure. Le Globex clôture à 22h00 Paris et rouvre à 23h00 : la nouvelle séance appartient au jour de trading suivant, les entrées y sont de nouveau autorisées.")
 
 whNum(float v) =>
     na(v) ? 'null' : str.tostring(math.round_to_mintick(v))
@@ -140,24 +152,25 @@ nearestLiqHigh = h1_newBar ? nearestSwingAbove(h1_closePrev) : na
 nearestLiqLow  = h1_newBar ? nearestSwingBelow(h1_closePrev) : na
 
 // ============================================================================
-// EOD FLATTEN — day-trading only, no overnight positions.
-//    No new setup is armed at/after the flatten time, and any open position
-//    is force-closed at the flatten time.
+// EOD FLATTEN — day-trading only, prop firm : aucune position conservée.
+//    Fenêtre de coupure [21h30 → 23h00 Paris) : aucun setup armé, aucune
+//    entrée FVG, toute position ouverte est fermée. Le Globex clôturant à
+//    22h00 Paris (vendredi inclus, donc avant le week-end) et rouvrant à
+//    23h00, la fenêtre couvre toute la fin de séance ; la réouverture 23h00
+//    appartient au jour de trading suivant.
 // ============================================================================
 newTradingDay = ta.change(time("D")) != 0
 
-// On Fridays, use the earlier Friday cutoff (close to the Globex session end)
-// instead of the regular EOD flatten time, so the position is closed before
-// the weekend gap rather than carrying over to Sunday's reopen.
-isFriday = dayofweek == dayofweek.friday
-regularFlatten = isFriday ?
-     (hour > fridayFlattenHour or (hour == fridayFlattenHour and minute >= fridayFlattenMinute)) :
-     (hour == flattenHour and minute >= flattenMinute)
+// Heure de PARIS explicite : les builtins hour/minute nus sont dans le fuseau
+// de l'exchange (America/Chicago pour CME) — un seuil « 21h45 » y tombait en
+// fait à 4h45 du matin à Paris, et ne persistait que pendant l'heure 21.
+minutesParis = hour(time, "Europe/Paris") * 60 + minute(time, "Europe/Paris")
+eodWindow    = minutesParis >= eodCutoffHour * 60 + eodCutoffMinute and minutesParis < eodReopenHour * 60
 
 // Safety net: if a position is still open when a new trading day starts
-// (e.g. a holiday or data gap meant neither flatten condition above fired),
+// (e.g. a holiday or data gap meant the cutoff window had no bar),
 // flatten it on the first bar of the new day instead of waiting further.
-eodFlatten = regularFlatten or (newTradingDay and strategy.position_size != 0)
+eodFlatten = eodWindow or (newTradingDay and strategy.position_size != 0)
 
 // ============================================================================
 // 3) SETUP — REJET AU SWING 1H NON MITIGÉ LE PLUS PROCHE
@@ -225,7 +238,9 @@ stopDistance = useATRStop ? atrVal * atrMult : stopOffset
 // ============================================================================
 var float activeTp = na
 
-if strategy.position_size == 0 and pendingDir == 1 and bullFVG
+// Les entrées elles-mêmes sont bloquées pendant la fenêtre de coupure : un
+// setup armé avant 21h30 ne doit pas déclencher d'entrée FVG après.
+if strategy.position_size == 0 and pendingDir == 1 and bullFVG and not eodFlatten
     entryPrice = close
     stopPrice  = fvgLowestLow - stopDistance
     target     = useSwingTP ? nearestSwingAbove(entryPrice) : pendingTarget
@@ -244,7 +259,7 @@ if strategy.position_size == 0 and pendingDir == 1 and bullFVG
               " | TP " + str.tostring(target, format.mintick), alert.freq_once_per_bar_close)
     pendingDir := 0
 
-if strategy.position_size == 0 and pendingDir == -1 and bearFVG
+if strategy.position_size == 0 and pendingDir == -1 and bearFVG and not eodFlatten
     entryPrice = close
     stopPrice  = fvgHighestHigh + stopDistance
     target     = useSwingTP ? nearestSwingBelow(entryPrice) : pendingTarget
@@ -263,10 +278,12 @@ if strategy.position_size == 0 and pendingDir == -1 and bearFVG
               " | TP " + str.tostring(target, format.mintick), alert.freq_once_per_bar_close)
     pendingDir := 0
 
-// Force-close any open position at the EOD flatten time (no overnight holding)
-if strategy.position_size != 0 and eodFlatten
-    whAlert('flatten', float(na), float(na))
-    strategy.close_all(comment="EOD Flatten")
+// Coupure fin de journée : flatten forcé de toute position ouverte, et aucun
+// setup ne reste armé pour la fin de séance (pendingDir purgé même à plat).
+if eodFlatten
+    if strategy.position_size != 0
+        whAlert('flatten', float(na), float(na))
+        strategy.close_all(comment="EOD Flatten")
     pendingDir := 0
 
 // Trade terminé → on oublie le TP actif (transition position ouverte → flat,
