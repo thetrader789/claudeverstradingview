@@ -52,6 +52,13 @@ atrTf = input.timeframe("240", "ATR timeframe (SL/TP)", group="Risque",
 valSource = input.string("H/L", "Source validation ligne", options=["close", "H/L"], group="Trendline",
      tooltip="PPT : la trendline doit couvrir corps ET mèches → H/L. « close » ne teste que les clôtures.")
 
+useRsFilter = input.bool(true, "Filtrer les longs par RS line", group="RS line",
+     tooltip="PPT : RS line bleue = plus fort que le marché → longs autorisés ; rose = plus faible → longs bloqués. Les shorts ne sont pas filtrés.")
+rsBench = input.symbol("TVC:DXY", "Benchmark (« le marché »)", group="RS line",
+     tooltip="RS line = close / close(benchmark). DXY par défaut pour le forex ; SP:SPX pour des actions.")
+rsMaLen = input.int(200, "MM de la RS line", minval=1, group="RS line",
+     tooltip="RS line au-dessus de sa moyenne = bleue (forte), en-dessous = rose (faible). 200 barres 1H ≈ 8 jours : mesure un régime de force, pas le momentum court terme (une MM courte est toujours bleue au moment d'un breakout haussier et ne filtre rien).")
+
 whNum(float v) =>
     na(v) ? 'null' : str.tostring(math.round_to_mintick(v))
 
@@ -82,6 +89,17 @@ atr = request.security(syminfo.tickerid, atrTf, ta.atr(atrLen))
 relVol  = not na(curVol) and not na(pastVol) and pastVol > 0 ? curVol / pastVol : na
 highVol = not na(relVol) and relVol >= volMult
 rvolOk  = highVol
+
+// ══════════════════════════════════════════════════════════════
+// RS LINE (PPT, style IBD)
+//   RS = close / close(benchmark). Au-dessus de sa moyenne mobile
+//   = bleue (plus fort que le marché), en-dessous = rose (plus
+//   faible). Les longs ne sont pris que si la RS line est bleue.
+// ══════════════════════════════════════════════════════════════
+float benchClose = request.security(rsBench, timeframe.period, close)
+float rsLine  = not na(benchClose) and benchClose != 0 ? close / benchClose : na
+float rsMa    = ta.sma(rsLine, rsMaLen)
+bool  rsBlue  = not na(rsLine) and not na(rsMa) and rsLine > rsMa
 
 // ══════════════════════════════════════════════════════════════
 // RÉSISTANCE — 2 pivots hauts consécutifs décroissants
@@ -189,7 +207,8 @@ int ascAge  = ascValid  ? bar_index - ascBirth  : 0
 
 longBreak  = descValid and descAge >= minBarsValid and close > upper and close[1] <= upper[1]
 longNotFar = close <= upper * (1.0 + maxBreakPct / 100.0)
-longSignal = longBreak and longNotFar and highVol and noPosition
+longRsOk   = not useRsFilter or rsBlue
+longSignal = longBreak and longNotFar and highVol and noPosition and longRsOk
 
 shortBreak  = ascValid and ascAge >= minBarsValid and close < lower and close[1] >= lower[1]
 shortNotFar = close >= lower * (1.0 - maxBreakPct / 100.0)
@@ -262,7 +281,7 @@ if barstate.islast
 // ══════════════════════════════════════════════════════════════
 // TABLE DE BORD (coin haut-droit)
 // ══════════════════════════════════════════════════════════════
-var table dash = table.new(position.top_right, 2, 6,
+var table dash = table.new(position.top_right, 2, 7,
      bgcolor=color.new(color.black, 50), border_color=color.new(color.gray, 30), border_width=1)
 
 _hdr(col, row, txt) =>
@@ -294,3 +313,8 @@ if barstate.islast
 
     _hdr(0, 5, "R:R")
     _val(1, 5, str.tostring(rrRatio, "#.#") + ":1", color.new(color.gray, 40))
+
+    _hdr(0, 6, "RS line")
+    rsBg  = na(rsLine) or na(rsMa) ? color.new(color.gray, 55) : rsBlue ? color.new(color.blue, 25) : color.new(color.maroon, 25)
+    rsStr = na(rsLine) or na(rsMa) ? "—" : rsBlue ? "Bleue ✓" : "Rose ✗"
+    _val(1, 6, rsStr, rsBg)
