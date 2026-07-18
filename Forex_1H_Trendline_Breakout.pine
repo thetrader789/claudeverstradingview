@@ -7,8 +7,10 @@ strategy("Forex 1H – Trendline Breakout", overlay=true,
 
 import TradingView/ta/7
 
-// Nécessaire pour la boucle de validation (close[i] avec index dynamique)
+// Nécessaire pour la boucle de validation (index dynamique)
 max_bars_back(close, 2000)
+max_bars_back(high, 2000)
+max_bars_back(low, 2000)
 
 // ══════════════════════════════════════════════════════════════
 // INPUTS
@@ -45,6 +47,11 @@ tlValidate = input.bool(true, "Ligne propre exigée (validation A → aujourd'hu
 minBarsValid = input.int(3, "Barres mini avant cassure", minval=0, group="Trendline",
      tooltip="Façon LuxAlgo « Minimal bars » : la cassure ne vaut signal que si la ligne était intacte depuis au moins N barres.")
 
+atrTf = input.timeframe("240", "ATR timeframe (SL/TP)", group="Risque",
+     tooltip="PPT : stop = intersection − ATR 240 (14). L'ATR du SL/TP est pris sur ce timeframe, pas sur celui du graphique.")
+valSource = input.string("H/L", "Source validation ligne", options=["close", "H/L"], group="Trendline",
+     tooltip="PPT : la trendline doit couvrir corps ET mèches → H/L. « close » ne teste que les clôtures.")
+
 whNum(float v) =>
     na(v) ? 'null' : str.tostring(math.round_to_mintick(v))
 
@@ -66,8 +73,10 @@ whAlert(string action, float slLvl, float tpLvl) =>
 
 // ══════════════════════════════════════════════════════════════
 // ATR + RVOL
+//   ATR pris sur atrTf (240 = 4H par défaut, spec PPT) : c'est lui
+//   qui dimensionne le SL (intersection ∓ ATR) et le TP (× R:R).
 // ══════════════════════════════════════════════════════════════
-atr = ta.atr(atrLen)
+atr = request.security(syminfo.tickerid, atrTf, ta.atr(atrLen))
 
 [curVol, pastVol, _] = ta.relativeVolume(rvolLen, rvolAnchor, true, true)
 relVol  = not na(curVol) and not na(pastVol) and pastVol > 0 ? curVol / pastVol : na
@@ -100,7 +109,10 @@ if not na(ph)
         if tlValidate
             int span = math.min(bar_index - phx1, 2000)
             for i = 0 to span
-                if close[i] > phy1 + slope * float(bar_index - i - phx1)
+                // PPT : la ligne doit couvrir corps ET mèches → high ; sinon close
+                // (demi-tick de tolérance : les 2 pivots sont exactement sur la ligne)
+                float ref = valSource == "H/L" ? high[i] : close[i]
+                if ref > phy1 + slope * float(bar_index - i - phx1) + syminfo.mintick / 2
                     broken := true
                     break
         if not broken
@@ -138,7 +150,9 @@ if not na(pl)
         if tlValidate
             int span = math.min(bar_index - plx1, 2000)
             for i = 0 to span
-                if close[i] < ply1 + slope * float(bar_index - i - plx1)
+                // PPT : la ligne doit couvrir corps ET mèches → low ; sinon close
+                float ref = valSource == "H/L" ? low[i] : close[i]
+                if ref < ply1 + slope * float(bar_index - i - plx1) - syminfo.mintick / 2
                     broken := true
                     break
         if not broken
@@ -183,8 +197,8 @@ shortSignal = shortBreak and shortNotFar and highVol and noPosition
 
 // ══════════════════════════════════════════════════════════════
 // ENTRÉES / SORTIES
-//   SL LONG  = résistance cassée − ATR
-//   SL SHORT = support cassé     + ATR
+//   SL LONG  = résistance cassée − ATR (atrTf, spec PPT)
+//   SL SHORT = support cassé     + ATR (atrTf, spec PPT)
 //   TP       = close ± ATR × R:R
 // ══════════════════════════════════════════════════════════════
 if longSignal
@@ -238,7 +252,7 @@ if barstate.islast
     label.delete(infoLbl)
     rvolStr  = not na(relVol) ? str.tostring(relVol, "#.##") + "x" : "NA"
     atrStr   = str.tostring(atr, "#.#####")
-    lblTxt   = "RVOL " + rvolStr + "\nATR  " + atrStr
+    lblTxt   = "RVOL " + rvolStr + "\nATR " + atrTf + "  " + atrStr
     lblColor = rvolOk ? color.new(color.green, 20) : color.new(color.red, 20)
     infoLbl  := label.new(bar_index + 2, high, lblTxt,
          xloc=xloc.bar_index, yloc=yloc.price,
@@ -264,7 +278,7 @@ if barstate.islast
     volBg = rvolOk ? color.new(color.green, 25) : color.new(color.red, 25)
     _val(1, 0, not na(relVol) ? str.tostring(relVol, "#.##") + "x" : "—", volBg)
 
-    _hdr(0, 1, "ATR")
+    _hdr(0, 1, "ATR " + atrTf)
     _val(1, 1, str.tostring(atr, "#.#####"), color.new(color.gray, 40))
 
     _hdr(0, 2, "Résistance")
