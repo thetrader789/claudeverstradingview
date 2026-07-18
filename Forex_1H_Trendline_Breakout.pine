@@ -2,18 +2,23 @@
 strategy("Forex 1H – Trendline Breakout", overlay=true,
      default_qty_type=strategy.percent_of_equity, default_qty_value=2,
      commission_type=strategy.commission.percent, commission_value=0.01,
-     initial_capital=10000, calc_on_every_tick=true)
+     initial_capital=10000, calc_on_every_tick=true,
+     max_lines_count=500, max_labels_count=500)
 
 import TradingView/ta/7
+
+// Nécessaire pour la boucle de validation (close[i] avec index dynamique)
+max_bars_back(close, 2000)
 
 // ══════════════════════════════════════════════════════════════
 // INPUTS
 // ══════════════════════════════════════════════════════════════
 pivotLen    = input.int(10,   "Pivot length (barres de chaque côté)", minval=3, maxval=50,  group="Trendline",
      tooltip="10 = swing sur ±10 barres. Plus grand = pivots plus significatifs.")
-minSpanBars = input.int(240,  "Span mini entre 2 pivots (barres 1H)", minval=24,            group="Trendline",
-     tooltip="1H forex : 24 barres = 1 jour. 10 jours = 240 barres (défaut).")
-maxPivots   = input.int(10,   "Nb pivots mémorisés",  minval=4, maxval=30,                  group="Trendline")
+minSpanBars = input.int(24,   "(obsolète — non utilisé)", minval=6,                         group="Trendline",
+     tooltip="Conservé uniquement pour ne pas décaler les indices in_N sauvegardés.")
+maxPivots   = input.int(10,   "(obsolète — non utilisé)",  minval=4, maxval=30,             group="Trendline",
+     tooltip="Conservé uniquement pour ne pas décaler les indices in_N sauvegardés.")
 maxBreakPct = input.float(3.0,"Breakout max (%)",     minval=0.1, step=0.5,                 group="Signal",
      tooltip="Cassure ignorée si close est déjà à plus de X% au-delà de la trendline.")
 rvolLen     = input.int(50,   "RVOL lookback (barres)",          minval=1,                  group="Volume")
@@ -29,6 +34,16 @@ rrRatio     = input.float(2.0,"Risk : Reward",                   minval=0.5, ste
 useWebhook = input.bool(false, "Alertes webhook JSON", group="Webhook")
 whSecret   = input.string("CHANGE_ME", "Secret partagé", group="Webhook", tooltip="Doit correspondre au secret attendu par le serveur FastAPI")
 whStrat    = input.string("FOREX_1H_TL", "Identifiant stratégie", group="Webhook")
+
+// Nouveaux inputs — déclarés après les inputs webhook pour préserver les indices in_N sauvegardés.
+srDays = input.int(10, "Fenêtre S/R (jours)", minval=2, maxval=60, group="Trendline",
+     tooltip="Durée de vie max d'une ligne : plus vieille que N jours, elle expire et n'est plus tracée ni cassable.")
+int srWindowBars = srDays * 24               // 1H forex : ~24 barres par jour
+
+tlValidate = input.bool(true, "Ligne propre exigée (validation A → aujourd'hui)", group="Trendline",
+     tooltip="Façon LuxAlgo « Check breaks » : la trendline n'est retenue que si aucune clôture ne l'a traversée entre le premier pivot et la barre de création.")
+minBarsValid = input.int(3, "Barres mini avant cassure", minval=0, group="Trendline",
+     tooltip="Façon LuxAlgo « Minimal bars » : la cassure ne vaut signal que si la ligne était intacte depuis au moins N barres.")
 
 whNum(float v) =>
     na(v) ? 'null' : str.tostring(math.round_to_mintick(v))
@@ -60,130 +75,149 @@ highVol = not na(relVol) and relVol >= volMult
 rvolOk  = highVol
 
 // ══════════════════════════════════════════════════════════════
-// TRENDLINE DESCENDANTE — swing HIGHS → signal LONG
-//   Relie les pivot highs en descente.
-//   Algorithme : paire la moins pentue (slope le plus proche de 0
-//   par en-dessous) avec span ≥ minSpanBars.
+// RÉSISTANCE — 2 pivots hauts consécutifs décroissants
+//   (façon LuxAlgo Trend Lines)
+//   La ligne relie le pivot précédent (A) au nouveau pivot (B).
+//   Elle n'est retenue que si « propre » : aucune clôture ne l'a
+//   traversée entre A et aujourd'hui. Ensuite elle est étendue
+//   barre après barre, et meurt dès qu'une clôture la casse ou
+//   quand elle dépasse la fenêtre S/R.
 // ══════════════════════════════════════════════════════════════
 ph = ta.pivothigh(high, pivotLen, pivotLen)
 
-var float[] ph_prices = array.new_float(0)
-var int[]   ph_bars   = array.new_int(0)
+var int   phx1      = na
+var float phy1      = na
+var float descSlope = na
+var float upper     = na
+var int   descBirth = na
+var bool  descValid = false
 
 if not na(ph)
-    array.unshift(ph_prices, ph)
-    array.unshift(ph_bars,   bar_index - pivotLen)
-    if array.size(ph_prices) > maxPivots
-        array.pop(ph_prices)
-        array.pop(ph_bars)
+    int x2 = bar_index - pivotLen
+    if not na(phy1) and ph < phy1
+        float slope = (ph - phy1) / float(x2 - phx1)
+        bool broken = false
+        if tlValidate
+            int span = math.min(bar_index - phx1, 2000)
+            for i = 0 to span
+                if close[i] > phy1 + slope * float(bar_index - i - phx1)
+                    broken := true
+                    break
+        if not broken
+            descSlope := slope
+            upper     := ph + slope * float(pivotLen)   // valeur de la ligne à la barre courante
+            descBirth := bar_index
+            descValid := true
+            // Segment historique A → B (pointillé, comme LuxAlgo)
+            line.new(phx1, phy1, x2, ph, color=color.new(color.red, 40), style=line.style_dotted)
+    phy1 := ph
+    phx1 := x2
 
-float descSlope  = na
-float descAnchorP = na
-int   descAnchorB = na
-
-int nH = array.size(ph_prices)
-if nH >= 2
-    for i = 0 to nH - 2
-        for j = i + 1 to nH - 1
-            float p_new = array.get(ph_prices, i)   // pivot récent (i=0 = le plus récent)
-            int   b_new = array.get(ph_bars,   i)
-            float p_old = array.get(ph_prices, j)   // pivot ancien
-            int   b_old = array.get(ph_bars,   j)
-            int   span  = b_new - b_old
-            // Descendante : high ancien > high récent
-            if p_old > p_new and span >= minSpanBars
-                float s = (p_new - p_old) / float(span)   // slope < 0
-                if na(descSlope) or s > descSlope          // le moins négatif = le plus plat
-                    descSlope   := s
-                    descAnchorP := p_new
-                    descAnchorB := b_new
-
-float tlDesc = not na(descSlope) ? descAnchorP + descSlope * float(bar_index - descAnchorB) : na
-bool  descOk = not na(descSlope) and descSlope < 0
+// Extension barre après barre (sauf à la barre de création)
+if descValid and bar_index > descBirth
+    upper += descSlope
 
 // ══════════════════════════════════════════════════════════════
-// TRENDLINE MONTANTE — swing LOWS → signal SHORT
-//   Relie les pivot lows en montée.
-//   Algorithme : paire la moins pentue (slope le plus proche de 0
-//   par en-dessus) avec span ≥ minSpanBars.
+// SUPPORT — 2 pivots bas consécutifs croissants
+//   Même mécanique, symétrique.
 // ══════════════════════════════════════════════════════════════
 pl = ta.pivotlow(low, pivotLen, pivotLen)
 
-var float[] pl_prices = array.new_float(0)
-var int[]   pl_bars   = array.new_int(0)
+var int   plx1     = na
+var float ply1     = na
+var float ascSlope = na
+var float lower    = na
+var int   ascBirth = na
+var bool  ascValid = false
 
 if not na(pl)
-    array.unshift(pl_prices, pl)
-    array.unshift(pl_bars,   bar_index - pivotLen)
-    if array.size(pl_prices) > maxPivots
-        array.pop(pl_prices)
-        array.pop(pl_bars)
+    int x2 = bar_index - pivotLen
+    if not na(ply1) and pl > ply1
+        float slope = (pl - ply1) / float(x2 - plx1)
+        bool broken = false
+        if tlValidate
+            int span = math.min(bar_index - plx1, 2000)
+            for i = 0 to span
+                if close[i] < ply1 + slope * float(bar_index - i - plx1)
+                    broken := true
+                    break
+        if not broken
+            ascSlope := slope
+            lower    := pl + slope * float(pivotLen)    // valeur de la ligne à la barre courante
+            ascBirth := bar_index
+            ascValid := true
+            line.new(plx1, ply1, x2, pl, color=color.new(color.green, 40), style=line.style_dotted)
+    ply1 := pl
+    plx1 := x2
 
-float ascSlope  = na
-float ascAnchorP = na
-int   ascAnchorB = na
+if ascValid and bar_index > ascBirth
+    lower += ascSlope
 
-int nL = array.size(pl_prices)
-if nL >= 2
-    for i = 0 to nL - 2
-        for j = i + 1 to nL - 1
-            float p_new = array.get(pl_prices, i)   // pivot récent
-            int   b_new = array.get(pl_bars,   i)
-            float p_old = array.get(pl_prices, j)   // pivot ancien
-            int   b_old = array.get(pl_bars,   j)
-            int   span  = b_new - b_old
-            // Montante : low ancien < low récent
-            if p_old < p_new and span >= minSpanBars
-                float s = (p_new - p_old) / float(span)   // slope > 0
-                if na(ascSlope) or s < ascSlope            // le moins positif = le plus plat
-                    ascSlope   := s
-                    ascAnchorP := p_new
-                    ascAnchorB := b_new
-
-float tlAsc = not na(ascSlope) ? ascAnchorP + ascSlope * float(bar_index - ascAnchorB) : na
-bool  ascOk = not na(ascSlope) and ascSlope > 0
+// Niveaux affichés / utilisés par les signaux
+// na à la barre de création : coupe le tracé (linebr) pour éviter un
+// connecteur vertical entre l'ancienne ligne et la nouvelle (façon
+// LuxAlgo « ta.change(phslope) ? na : ... »)
+float tlDesc = descValid and bar_index != descBirth ? upper : na
+float tlAsc  = ascValid  and bar_index != ascBirth  ? lower : na
 
 // ══════════════════════════════════════════════════════════════
-// SIGNAUX
-//   LONG  : close casse AU-DESSUS de la trendline DESCENDANTE
-//   SHORT : close casse EN-DESSOUS de la trendline MONTANTE
+// SIGNAUX — uniquement sur BOS FRAIS de la ligne
+//   LONG  : close franchit la résistance sur CETTE barre
+//           (close[1] encore en-dessous), ligne intacte depuis
+//           au moins minBarsValid barres.
+//   SHORT : symétrique sous le support.
 //   Dans les deux cas : RVOL ≥ seuil + pas déjà en position
 // ══════════════════════════════════════════════════════════════
 noPosition = strategy.position_size == 0
 
-longBreak  = descOk and not na(tlDesc) and close > tlDesc
-longNotFar = close <= tlDesc * (1.0 + maxBreakPct / 100.0)
+int descAge = descValid ? bar_index - descBirth : 0
+int ascAge  = ascValid  ? bar_index - ascBirth  : 0
+
+longBreak  = descValid and descAge >= minBarsValid and close > upper and close[1] <= upper[1]
+longNotFar = close <= upper * (1.0 + maxBreakPct / 100.0)
 longSignal = longBreak and longNotFar and highVol and noPosition
 
-shortBreak  = ascOk and not na(tlAsc) and close < tlAsc
-shortNotFar = close >= tlAsc * (1.0 - maxBreakPct / 100.0)
+shortBreak  = ascValid and ascAge >= minBarsValid and close < lower and close[1] >= lower[1]
+shortNotFar = close >= lower * (1.0 - maxBreakPct / 100.0)
 shortSignal = shortBreak and shortNotFar and highVol and noPosition
 
 // ══════════════════════════════════════════════════════════════
 // ENTRÉES / SORTIES
-//   SL LONG  = intersection trendline descendante − ATR
-//   SL SHORT = intersection trendline montante    + ATR
+//   SL LONG  = résistance cassée − ATR
+//   SL SHORT = support cassé     + ATR
 //   TP       = close ± ATR × R:R
 // ══════════════════════════════════════════════════════════════
 if longSignal
-    sl_l = tlDesc - atr
+    sl_l = upper - atr
     tp_l = close + atr * rrRatio
     strategy.entry("Long",  strategy.long,  comment="BRK↑")
     strategy.exit("SL/TP L", "Long",  stop=sl_l, limit=tp_l)
     whAlert('buy', sl_l, tp_l)
 
 if shortSignal
-    sl_s = tlAsc + atr
+    sl_s = lower + atr
     tp_s = close - atr * rrRatio
     strategy.entry("Short", strategy.short, comment="BRK↓")
     strategy.exit("SL/TP S", "Short", stop=sl_s, limit=tp_s)
     whAlert('sell', sl_s, tp_s)
 
 // ══════════════════════════════════════════════════════════════
+// INVALIDATION (après les signaux, pour laisser la cassure
+// fraîche déclencher le trade sur sa barre)
+//   - clôture au-delà de la ligne → morte
+//   - plus vieille que la fenêtre S/R → expirée
+// ══════════════════════════════════════════════════════════════
+if descValid and (close > upper or bar_index - descBirth > srWindowBars)
+    descValid := false
+
+if ascValid and (close < lower or bar_index - ascBirth > srWindowBars)
+    ascValid := false
+
+// ══════════════════════════════════════════════════════════════
 // PLOTS
 // ══════════════════════════════════════════════════════════════
-plot(tlDesc, "TL Descendante (highs)", color=descOk ? color.red   : color.new(color.gray, 80), linewidth=2)
-plot(tlAsc,  "TL Montante (lows)",    color=ascOk  ? color.green : color.new(color.gray, 80), linewidth=2)
+plot(tlDesc, "Résistance (pivots hauts)", color=color.red,   linewidth=2, style=plot.style_linebr)
+plot(tlAsc,  "Support (pivots bas)",      color=color.green, linewidth=2, style=plot.style_linebr)
 
 // Marqueurs de signal
 plotshape(longSignal,  "Long",  shape.triangleup,   location.belowbar, color=color.new(color.lime, 0),   size=size.small)
@@ -233,10 +267,10 @@ if barstate.islast
     _hdr(0, 1, "ATR")
     _val(1, 1, str.tostring(atr, "#.#####"), color.new(color.gray, 40))
 
-    _hdr(0, 2, "TL Desc")
+    _hdr(0, 2, "Résistance")
     _val(1, 2, not na(tlDesc) ? str.tostring(tlDesc, "#.####") : "—", color.new(color.gray, 40))
 
-    _hdr(0, 3, "TL Asc")
+    _hdr(0, 3, "Support")
     _val(1, 3, not na(tlAsc) ? str.tostring(tlAsc, "#.####") : "—", color.new(color.gray, 40))
 
     _hdr(0, 4, "Position")
