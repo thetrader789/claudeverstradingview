@@ -822,6 +822,27 @@ anyFill    = array.size(fillEvents) > 0
 
 contWindow = tradeTime and not conditionStart and lastStart <= contWinMin and not tradeTimeMidnight and not tradeTimeUSA
 
+// ─── TEST A/B 18/07 : armement sur cassure BOS des extrêmes de session ───────
+// Les setups actuels ne s'arment que sur RETEST (fill) d'un pivot mémorisé ;
+// dans un BOS impulsif les niveaux sont balayés et rien ne se ré-arme (cas du
+// 17/07 : short 15h33 et rejection long 15h48 invisibles). Ici : la clôture
+// au-delà du plus bas/plus haut de session (depuis la bougie de référence)
+// arme la continuation (fenêtre BOS sans exclusion USA) et la réversion
+// (rejection dans les armBars bougies suivant la cassure). Filtres de
+// qualité (volCond, muchSell, mèche, ATR) inchangés.
+var float sessLo = na
+var float sessHi = na
+bosDown = not conditionStart and not na(sessLo) and close < sessLo
+bosUp   = not conditionStart and not na(sessHi) and close > sessHi
+if conditionStart
+    sessLo := low
+    sessHi := high
+else
+    sessLo := math.min(nz(sessLo, low), low)
+    sessHi := math.max(nz(sessHi, high), high)
+
+bosContWindow = tradeTime and not conditionStart and lastStart <= contWinMin and not tradeTimeMidnight
+
 if fillS2High and contWindow
     armContLongBar := bar_index
 if fillS2Low and contWindow
@@ -829,6 +850,15 @@ if fillS2Low and contWindow
 if anyFill and longTime
     armRevLongBar := bar_index
 if anyFill and shortTime
+    armRevShortBar := bar_index
+
+if bosUp and bosContWindow
+    armContLongBar := bar_index
+if bosDown and bosContWindow
+    armContShortBar := bar_index
+if bosDown and longTime
+    armRevLongBar := bar_index
+if bosUp and shortTime
     armRevShortBar := bar_index
 
 // ─── TJR Fix C : re-entrée après SL perdant si la thèse reverse est intacte ──
