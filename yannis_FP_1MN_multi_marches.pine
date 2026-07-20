@@ -495,10 +495,18 @@ showVol          = false
 extendtilfilled  = true
 
 // ─── TJR : confirmation structurelle + setup armé ───────────────────────────
-// Filtres BOS désactivés par défaut (07/07) : l'échantillon de backtest est trop
-// court pour valider leur fiabilité (choix utilisateur).
-useStructFilterLong  = input.bool(false, 'Filtre BOS structurel — Longs', group='TJR')
-useStructFilterShort = input.bool(false, 'Filtre BOS structurel — Shorts', group='TJR')
+// Filtres BOS activés par défaut (20/07, demande utilisateur) : le trade long
+// du 13/07 01h11 (réversion nuit Globex) est entré sans aucune cassure de
+// structure réelle — seul un retest de pivot mineur (anyFill) + micro-cassure
+// locale (close > high[1]) l'armaient, structBias n'étant pas exigé tant que
+// ce filtre restait désactivé (choix du 07/07, échantillon jugé trop court à
+// l'époque). Ré-activé : exige désormais structBias == 1/-1 (clôture au-delà
+// du dernier pivot série 2) avant toute entrée long/short, continuation comme
+// réversion. A/B 13-20/07 NQ1! (qty 1) : sans filtre −1 455 $ / PF 0,89 / 39
+// trades / DD 4 975 → avec filtre +405 $ / PF 1,18 / 10 trades / DD 1 780 (les
+// 29 trades retirés sont presque tous des longs perdants).
+useStructFilterLong  = input.bool(true, 'Filtre BOS structurel — Longs', group='TJR')
+useStructFilterShort = input.bool(true, 'Filtre BOS structurel — Shorts', group='TJR')
 armBars              = input.int(5, 'Validité setup armé (bougies, 0 = comportement original)', minval=0, group='TJR')
 
 // ─── Continuation : fenêtre + sens de la bougie de référence ─────────────────
@@ -573,6 +581,23 @@ voltresh = input.int(0, 'Volume >', group='Conditions')
 // SL/TP/break-even. Déclaré en dernier (indices in_N des graphiques).
 useFpCloseCont = input.bool(true, 'Sortie fair price : fermer aussi les continuations', group='Gestion trade : BE / TP / ATR', tooltip='Coché = comportement historique (toute position est fermée quand une bougie clôture dans la zone FP). Décoché = les trades de continuation (continue / crossContinue) ne sont plus fermés au retour dans la zone fair price.')
 
+// Fraîcheur du biais structurel (20/07). Sans reset, structBias est global et
+// collant : il garde +1/-1 depuis la dernière cassure de pivot série 2, qui
+// peut dater de plusieurs heures, et comme la condition est un test de niveau
+// (close > lastHi2) réévalué à chaque bougie, il suffit que le prix soit encore
+// au-dessus de l'ancien pivot. Coché : structBias ET les pivots mémorisés
+// repartent de zéro à chaque bougie de référence, donc seule une cassure d'un
+// pivot formé DANS la session peut valider structLongOk / structShortOk.
+// Désactivé par défaut : A/B 13-20/07 NQ1! (qty 1) = −790 $ / PF 0,59 / 7 trades
+// contre +405 $ / PF 1,18 / 10 trades sans reset. Et surtout le reset ne règle
+// PAS le cas qui l'a motivé (long 13/07 01h11, toujours pris) : un pivot 6/6
+// s'était formé et avait été cassé DANS la session Globex avant 01h11, donc la
+// cassure est bien « fraîche » au sens du script. Le vrai écart est d'échelle —
+// un pivot de 6 bougies en 1 mn est une microstructure, pas le BOS que l'œil
+// lit sur le graphique. Déclaré en dernier : les indices in_N du graphique ne
+// bougent pas.
+structBiasReset = input.bool(false, 'BOS structurel : remettre à zéro à chaque session', group='TJR', tooltip='Coché = le biais structurel et les pivots mémorisés sont réinitialisés à chaque bougie de référence : seule une cassure survenue dans la session en cours peut valider structLongOk / structShortOk. Décoché (défaut) = comportement historique, biais collant hérité des sessions précédentes — meilleur en backtest (voir commentaire).')
+
 // Appearance inputs
 showhighs        = true
 showlows         = true
@@ -624,6 +649,10 @@ if l2
 var int   structBias = 0
 var float lastHi2    = na
 var float lastLo2    = na
+if structBiasReset and conditionStart
+    structBias := 0
+    lastHi2    := na
+    lastLo2    := na
 if h2
     lastHi2 := pivHi2
 if l2
