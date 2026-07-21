@@ -584,7 +584,7 @@ useFpCloseCont = input.bool(true, 'Sortie fair price : fermer aussi les continua
 // Fraîcheur du biais structurel (20/07). Sans reset, structBias est global et
 // collant : il garde +1/-1 depuis la dernière cassure de pivot série 2, qui
 // peut dater de plusieurs heures, et comme la condition est un test de niveau
-// (close > lastHi2) réévalué à chaque bougie, il suffit que le prix soit encore
+// (close > lastHiStruct) réévalué à chaque bougie, il suffit que le prix soit encore
 // au-dessus de l'ancien pivot. Coché : structBias ET les pivots mémorisés
 // repartent de zéro à chaque bougie de référence, donc seule une cassure d'un
 // pivot formé DANS la session peut valider structLongOk / structShortOk.
@@ -597,6 +597,40 @@ useFpCloseCont = input.bool(true, 'Sortie fair price : fermer aussi les continua
 // lit sur le graphique. Déclaré en dernier : les indices in_N du graphique ne
 // bougent pas.
 structBiasReset = input.bool(false, 'BOS structurel : remettre à zéro à chaque session', group='TJR', tooltip='Coché = le biais structurel et les pivots mémorisés sont réinitialisés à chaque bougie de référence : seule une cassure survenue dans la session en cours peut valider structLongOk / structShortOk. Décoché (défaut) = comportement historique, biais collant hérité des sessions précédentes — meilleur en backtest (voir commentaire).')
+
+// ─── Taille des pivots qui valident le BOS structurel (21/07) ────────────────
+// structBias s'appuyait sur les pivots série 2 (« Continuation Swing », 6/6),
+// partagés avec les niveaux dessinés : impossible de régler l'échelle du BOS
+// sans changer aussi les niveaux. Cas du long NQ1! 21/07 16h18 — higher low,
+// volume 2103 vs 1556 de moyenne, cassure du high de 16h14 (29 137,25), tous
+// les autres filtres verts (RR compris : 57 pts vers le fair price pour un sp
+// de 50) — refusé parce que le dernier pivot 6/6 confirmé était le sommet de
+// 16h00 à 29 188,50, soit 36 points au-dessus de la clôture : structBias
+// restait à -1 et structLongOk bloquait. Ces deux réglages découplent la
+// taille du pivot qui valide le BOS de celle des niveaux dessinés, et la
+// séparent longs (pivot high) / shorts (pivot low). Défaut 6 = comportement
+// historique à l'identique ; 3 aurait pris le trade du 16h18 (pivot de 16h14
+// confirmé à 16h17, cassé à la clôture de 16h18).
+// Déclarés en dernier : les indices in_N du graphique ne bougent pas.
+// 0 = hériter du « Continuation Swing » (swingSizeL2/R2), donc comportement
+// v14 strictement reproduit QUELLE QUE SOIT la valeur de ce réglage — un
+// défaut fixe à 6 aurait au contraire ignoré un Continuation Swing réglé à 3.
+structPivLenLong  = input.int(0, 'BOS structurel — bougies du pivot (Longs)',  minval=0, group='TJR', tooltip='0 = suit le réglage Continuation Swing (comportement historique). Sinon : nombre de bougies à gauche ET à droite du pivot high dont la cassure en clôture valide la structure haussière (structLongOk). Plus petit = BOS plus réactif, proche de la microstructure lue sur le graphique ; plus grand = seuls les sommets majeurs comptent.')
+structPivLenShort = input.int(0, 'BOS structurel — bougies du pivot (Shorts)', minval=0, group='TJR', tooltip='0 = suit le réglage Continuation Swing (comportement historique). Sinon : nombre de bougies à gauche ET à droite du pivot low dont la cassure en clôture valide la structure baissière (structShortOk).')
+
+// ─── Source d'armement des réversions (21/07) ────────────────────────────────
+// Asymétrie non voulue : les continuations ne s'arment que sur les fills de la
+// série 2 (fillS2High / fillS2Low), conformément au nom « Continuation Swing »,
+// alors que les réversions s'arment sur anyFill, qui mélange les deux séries.
+// Le « Rejection Swing » ne pilote donc qu'une partie des armements de
+// rejection, et le « Continuation Swing » en pilote l'autre — d'où l'effet
+// constaté dans le dialogue de réglages. Aggravant : la série 1 n'est créée
+// que pendant longTime/shortTime et d'un seul côté, la série 2 sans condition,
+// donc c'est la série 2 qui domine anyFill.
+// Défaut = comportement historique. À tester en A/B avant de changer : limiter
+// à la série 1 réduira mécaniquement le nombre de réversions armées.
+// Déclaré en dernier : les indices in_N du graphique ne bougent pas.
+revArmSrc = input.string('Les deux (historique)', 'Réversion : niveaux qui arment le setup', options=['Les deux (historique)', 'Série 1 — Rejection Swing', 'Série 2 — Continuation Swing'], group='TJR', tooltip='Quels niveaux remplis (retest par le corps de la bougie) arment un setup de réversion. « Les deux » = comportement historique. « Série 1 » = seuls les pivots Rejection Swing comptent, ce qui rend le réglage Continuation Swing sans effet sur les rejections.')
 
 // Appearance inputs
 showhighs        = true
@@ -643,23 +677,35 @@ if h2
 if l2
     prevLowIndex2  := bar_index - swingSizeR2
 
-// ─── TJR Fix D : biais structurel — BOS confirmé en clôture sur pivots série 2 ─
-// +1 : dernier swing high série 2 cassé en clôture (structure haussière confirmée)
-// -1 : dernier swing low série 2 cassé en clôture (structure baissière confirmée)
-var int   structBias = 0
-var float lastHi2    = na
-var float lastLo2    = na
+// ─── TJR Fix D : biais structurel — BOS confirmé en clôture ─────────────────
+// +1 : dernier swing high cassé en clôture (structure haussière confirmée)
+// -1 : dernier swing low cassé en clôture (structure baissière confirmée)
+// Depuis le 21/07, les pivots de référence ont leur propre taille réglable
+// (structPivLenLong / structPivLenShort) au lieu des pivots série 2 utilisés
+// pour les niveaux dessinés — voir le commentaire des inputs.
+// Les pivots dédiés sont calculés inconditionnellement (les ta.* ne doivent pas
+// être appelées dans une branche conditionnelle), puis retenus seulement si le
+// réglage est non nul ; sinon on réutilise les pivots série 2, qui conservent
+// leurs tailles gauche/droite distinctes (swingSizeL2 ≠ swingSizeR2 possible).
+pivHiDedie  = ta.pivothigh(high, math.max(structPivLenLong,  1), math.max(structPivLenLong,  1))
+pivLoDedie  = ta.pivotlow (low,  math.max(structPivLenShort, 1), math.max(structPivLenShort, 1))
+pivHiStruct = structPivLenLong  == 0 ? pivHi2 : pivHiDedie
+pivLoStruct = structPivLenShort == 0 ? pivLo2 : pivLoDedie
+
+var int   structBias   = 0
+var float lastHiStruct = na
+var float lastLoStruct = na
 if structBiasReset and conditionStart
-    structBias := 0
-    lastHi2    := na
-    lastLo2    := na
-if h2
-    lastHi2 := pivHi2
-if l2
-    lastLo2 := pivLo2
-if not na(lastHi2) and close > lastHi2
+    structBias   := 0
+    lastHiStruct := na
+    lastLoStruct := na
+if not na(pivHiStruct)
+    lastHiStruct := pivHiStruct
+if not na(pivLoStruct)
+    lastLoStruct := pivLoStruct
+if not na(lastHiStruct) and close > lastHiStruct
     structBias := 1
-if not na(lastLo2) and close < lastLo2
+if not na(lastLoStruct) and close < lastLoStruct
     structBias := -1
 
 // ─── TJR Fix A : niveau de stop structurel (extrême récent ± buffer) ─────────
@@ -847,7 +893,12 @@ if conditionStart
 
 fillS2High = array.includes(fillEvents, "high")
 fillS2Low  = array.includes(fillEvents, "low")
+fillS1     = array.includes(fillEvents, "s1")
 anyFill    = array.size(fillEvents) > 0
+
+// Armement des réversions : source sélectionnable (voir revArmSrc)
+revArmFill = revArmSrc == 'Série 1 — Rejection Swing'    ? fillS1 :
+     revArmSrc == 'Série 2 — Continuation Swing' ? (fillS2High or fillS2Low) : anyFill
 
 contWindow = tradeTime and not conditionStart and lastStart <= contWinMin and not tradeTimeMidnight and not tradeTimeUSA
 
@@ -876,9 +927,9 @@ if fillS2High and contWindow
     armContLongBar := bar_index
 if fillS2Low and contWindow
     armContShortBar := bar_index
-if anyFill and longTime
+if revArmFill and longTime
     armRevLongBar := bar_index
-if anyFill and shortTime
+if revArmFill and shortTime
     armRevShortBar := bar_index
 
 if bosUp and bosContWindow

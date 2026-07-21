@@ -60,6 +60,15 @@ namespace NinjaTrader.NinjaScript.Strategies
 		[Description("Cassure 2 bougies")]	Cassure2Bougies
 	}
 
+	// Quels niveaux remplis arment un setup de réversion. Les continuations, elles,
+	// ne s'arment que sur la série 2 : voir le commentaire de revArmSrc côté Pine.
+	public enum FpMmRevArmSrc
+	{
+		[Description("Les deux (historique)")]			LesDeux,
+		[Description("Série 1 — Rejection Swing")]		Serie1,
+		[Description("Série 2 — Continuation Swing")]	Serie2
+	}
+
 	public enum FpMmRevTp
 	{
 		[Description("Bord proche zone FP")]	BordProcheFp,
@@ -125,8 +134,8 @@ namespace NinjaTrader.NinjaScript.Strategies
 
 		// Pivots : index de la bougie de pivot et dernier extrême série 2
 		private int    structBias		= 0;
-		private double lastHi2			= double.NaN;
-		private double lastLo2			= double.NaN;
+		private double lastHiStruct		= double.NaN;
+		private double lastLoStruct		= double.NaN;
 
 		// Armement des setups (index de bougie, -1 = non armé)
 		private int armContLongBar		= -1;
@@ -275,6 +284,20 @@ namespace NinjaTrader.NinjaScript.Strategies
 		[Display(Name = "Continuation Swing — gauche", Order = 43, GroupName = "4. Pivots")]
 		public int SwingSizeL2 { get; set; }
 
+		// Taille des pivots qui valident le BOS structurel (21/07). Découplée des
+		// pivots série 2 utilisés pour les niveaux dessinés : voir le commentaire
+		// équivalent dans yannis_FP_1MN_multi_marches.pine. Défaut 6 = comportement
+		// historique à l'identique.
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name = "BOS structurel — bougies du pivot (Longs, 0 = Continuation Swing)", Order = 44, GroupName = "4. Pivots")]
+		public int StructPivLenLong { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0, int.MaxValue)]
+		[Display(Name = "BOS structurel — bougies du pivot (Shorts, 0 = Continuation Swing)", Order = 45, GroupName = "4. Pivots")]
+		public int StructPivLenShort { get; set; }
+
 		[NinjaScriptProperty]
 		[Display(Name = "Filtre BOS structurel — Longs", Order = 50, GroupName = "5. TJR")]
 		public bool UseStructFilterLong { get; set; }
@@ -300,6 +323,10 @@ namespace NinjaTrader.NinjaScript.Strategies
 		[NinjaScriptProperty]
 		[Display(Name = "Réversion : confirmation requise", Order = 55, GroupName = "5. TJR")]
 		public FpMmRevConfirm RevConfirm { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Réversion : niveaux qui arment le setup", Order = 59, GroupName = "5. TJR")]
+		public FpMmRevArmSrc RevArmSrc { get; set; }
 
 		[NinjaScriptProperty]
 		[Display(Name = "Stop structurel (au-delà du swing)", Order = 56, GroupName = "5. TJR")]
@@ -411,12 +438,15 @@ namespace NinjaTrader.NinjaScript.Strategies
 				News2000Days			= string.Empty;
 				SwingSizeR1 = 3; SwingSizeL1 = 3;
 				SwingSizeR2 = 6; SwingSizeL2 = 6;
+				StructPivLenLong		= 0;
+				StructPivLenShort		= 0;
 				UseStructFilterLong		= true;
 				UseStructFilterShort	= true;
 				ArmBars					= 5;
 				ContWinMin				= 10;
 				UseRefDir				= true;
 				RevConfirm				= FpMmRevConfirm.Cassure2Bougies;
+				RevArmSrc				= FpMmRevArmSrc.LesDeux;
 				UseStructStop			= false;
 				StopLookback			= 12;
 				MinRR					= 1.0;
@@ -836,20 +866,28 @@ namespace NinjaTrader.NinjaScript.Strategies
 			bool h2 = !double.IsNaN(pivHi2);
 			bool l2 = !double.IsNaN(pivLo2);
 
-			// BOS confirmé en clôture sur les pivots série 2 :
+			// BOS confirmé en clôture, sur des pivots dont la taille est réglable
+			// indépendamment des pivots série 2 (niveaux dessinés) :
 			// +1 = structure haussière, -1 = structure baissière
+			// 0 = hériter du Continuation Swing (pivots série 2), qui conservent
+			// leurs tailles gauche/droite distinctes : comportement historique.
+			double pivHiStruct = StructPivLenLong  == 0 ? pivHi2
+				: PivotHigh(StructPivLenLong,  StructPivLenLong);
+			double pivLoStruct = StructPivLenShort == 0 ? pivLo2
+				: PivotLow (StructPivLenShort, StructPivLenShort);
+
 			if (StructBiasReset && conditionStart)
 			{
-				structBias	= 0;
-				lastHi2		= double.NaN;
-				lastLo2		= double.NaN;
+				structBias		= 0;
+				lastHiStruct	= double.NaN;
+				lastLoStruct	= double.NaN;
 			}
 
-			if (h2) lastHi2 = pivHi2;
-			if (l2) lastLo2 = pivLo2;
+			if (!double.IsNaN(pivHiStruct)) lastHiStruct = pivHiStruct;
+			if (!double.IsNaN(pivLoStruct)) lastLoStruct = pivLoStruct;
 
-			if (!double.IsNaN(lastHi2) && Close[0] > lastHi2) structBias =  1;
-			if (!double.IsNaN(lastLo2) && Close[0] < lastLo2) structBias = -1;
+			if (!double.IsNaN(lastHiStruct) && Close[0] > lastHiStruct) structBias =  1;
+			if (!double.IsNaN(lastLoStruct) && Close[0] < lastLoStruct) structBias = -1;
 
 			double structBuffer	= 2.0  * kMkt;
 			double minStopPts	= 10.0 * kMkt;
@@ -886,7 +924,17 @@ namespace NinjaTrader.NinjaScript.Strategies
 
 			bool fillS2High	= fillEvents.Contains("high");
 			bool fillS2Low	= fillEvents.Contains("low");
+			bool fillS1		= fillEvents.Contains("s1");
 			bool anyFill	= fillEvents.Count > 0;
+
+			// Armement des réversions : source sélectionnable (voir RevArmSrc)
+			bool revArmFill;
+			switch (RevArmSrc)
+			{
+				case FpMmRevArmSrc.Serie1:	revArmFill = fillS1;					break;
+				case FpMmRevArmSrc.Serie2:	revArmFill = fillS2High || fillS2Low;	break;
+				default:					revArmFill = anyFill;					break;
+			}
 
 			bool contWindow    = tradeTime && !conditionStart && lastStart <= ContWinMin
 							  && !tradeTimeMidnight && !tradeTimeUSA;
@@ -911,8 +959,8 @@ namespace NinjaTrader.NinjaScript.Strategies
 			// Armement sur retest de pivot
 			if (fillS2High && contWindow)	armContLongBar	= CurrentBar;
 			if (fillS2Low  && contWindow)	armContShortBar	= CurrentBar;
-			if (anyFill && longTime)		armRevLongBar	= CurrentBar;
-			if (anyFill && shortTime)		armRevShortBar	= CurrentBar;
+			if (revArmFill && longTime)		armRevLongBar	= CurrentBar;
+			if (revArmFill && shortTime)	armRevShortBar	= CurrentBar;
 
 			// Armement sur cassure BOS des extrêmes de session
 			if (bosUp   && bosContWindow)	armContLongBar	= CurrentBar;
