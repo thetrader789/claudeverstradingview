@@ -47,8 +47,8 @@ flattenHour = input.int(17, "Heure de flatten (heure de l'EXCHANGE du symbole)",
 flattenMinute = input.int(45, "Minute de flatten", minval=0, maxval=59, group=grpFlatten,
      tooltip="Le flatten est actif de flattenHour:flattenMinute jusqu'à la fin de cette heure-là (ex. 17:45 → fenêtre 17:45-17:59, soit 3 bougies de 5 min avant la clôture — marge si une bougie manque).")
 
-disableLongsAsia = input.bool(false, "Pas de longs sur Asie", group=grpTrade,
-     tooltip="Sur NQ/MNQ (variante US), les longs pris sur l'opening range Asie étaient largement perdants (les shorts portaient la performance). À valider séparément sur les indices Europe/Asie avant de l'activer ici. Les longs restent autorisés sur Londres et en session personnalisée.")
+disableLongsAsia = input.bool(true, "Pas de longs sur Asie", group=grpTrade,
+     tooltip="Activé par défaut depuis le 21/07/2026 (décision utilisateur, alignée sur la transcription NinjaTrader). Sur NQ/MNQ (variante US), les longs pris sur l'opening range Asie étaient largement perdants — les shorts portaient la performance. Les longs restent autorisés sur Londres, New York et en session personnalisée.")
 tpProximityTicks = input.int(10, "Tolérance TP (ticks) — clôture proche du swing = sortie", minval=0, group=grpTrade,
      tooltip="Si une bougie CLÔTURE à moins de X ticks du swing cible sans que la limite ait été touchée, on ferme le trade au marché sur cette clôture plutôt que d'exiger le tick exact. 0 = désactivé.")
 dynamicTpFollow = input.bool(true, "TP dynamique (suit les nouveaux swings formés après l'entrée)", group=grpTrade,
