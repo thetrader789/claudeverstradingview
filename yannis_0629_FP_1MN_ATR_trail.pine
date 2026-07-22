@@ -348,6 +348,23 @@ extendtilfilled  = true
 hidefilled       = input.bool(false, 'Hide Filled', group='Conditions')
 voltresh = input.int(0, 'Volume >', group='Conditions')
 
+// ── Évaluation prop firm : plafond de gain cumulé ────────────────────
+// Déclarés en DERNIER (indices in_N stables sur les graphiques existants).
+grpEval = 'Évaluation prop firm'
+evalAccount = input.bool(false, "Compte d'évaluation (plafonner le gain cumulé)", group=grpEval, tooltip="À cocher UNIQUEMENT pour un compte d'évaluation prop firm. Dès que le profit net cumulé atteint le plafond ci-dessous, la position est fermée (flatten) et plus aucune nouvelle entrée n'est prise — l'objectif d'éval est sécurisé, verrouillage définitif. Décoché pour un compte financé (aucun effet).")
+maxGainEval = input.float(1500, 'Plafond de gain cumulé ($)', minval=0, step=50, group=grpEval, tooltip="Profit net cumulé (strategy.netprofit) à partir duquel on arrête ce compte. 1500 $ par défaut. Sans effet si « Compte d'évaluation » est décoché.")
+
+// ── Objectif d'évaluation atteint → flatten + blocage définitif ──────
+// Latch top-level (hors de la boucle d'entrées plus bas) : une fois le plafond
+// de gain cumulé franchi, on ferme la position et on bloque toute nouvelle
+// entrée via evalCapReached, ajouté aux 4 gardes d'entrée.
+var bool evalCapReached = false
+if evalAccount and not evalCapReached and strategy.netprofit >= maxGainEval
+    evalCapReached := true
+    strategy.cancel_all()
+    if strategy.position_size != 0
+        strategy.close_all(comment="Objectif éval atteint")
+
 // Appearance inputs
 showhighs        = true
 showlows         = true
@@ -528,7 +545,7 @@ manageLevel(boxes, lines, seriesId) =>
                      and not tradeTimeUSA
 
                         // ─── BUG #3 : filtre direction bougie de référence ───
-                        if candleBuy and swingType == "high" and not (highWickSize > bodySize * 0.4) and refCandleBull
+                        if candleBuy and swingType == "high" and not (highWickSize > bodySize * 0.4) and refCandleBull and not evalCapReached
                             strategy.entry("Long", strategy.long, qty = 10)
                             if swingTimeUSA
                                 tradeTypeLocal := "continue"
@@ -537,7 +554,7 @@ manageLevel(boxes, lines, seriesId) =>
                             else
                                 tradeTypeLocal := "crossContinue"
                             label.new(bar_index, high, text=str.tostring(tradeTypeLocal))
-                        if candleSell and swingType == "low" and not (lowWickSize > bodySize * 0.4) and refCandleBear
+                        if candleSell and swingType == "low" and not (lowWickSize > bodySize * 0.4) and refCandleBear and not evalCapReached
                             strategy.entry("Short", strategy.short, qty = 10)
                             if swingTimeUSA
                                 tradeTypeLocal := "continue"
@@ -566,6 +583,7 @@ manageLevel(boxes, lines, seriesId) =>
                  and level <= zoneLow - sp / 2
                  and lastStart > 15
                  and refCandleBull
+                 and not evalCapReached
                     strategy.entry("Long", strategy.long, qty = 10)
 
                     if swingTimeUSA
@@ -589,6 +607,7 @@ manageLevel(boxes, lines, seriesId) =>
                  and level <= zoneHigh + sp
                  and lastStart > 15
                  and refCandleBear
+                 and not evalCapReached
                     strategy.entry("Short", strategy.short, qty = 10)
 
                     if swingTimeUSA

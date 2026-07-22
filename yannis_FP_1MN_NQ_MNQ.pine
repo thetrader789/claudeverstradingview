@@ -480,6 +480,13 @@ voltresh = input.int(0, 'Volume >', group='Conditions')
 // SL/TP/break-even. Déclaré en dernier (indices in_N des graphiques).
 useFpCloseCont = input.bool(true, 'Sortie fair price : fermer aussi les continuations', group='Gestion trade : BE / TP / ATR', tooltip='Coché = comportement historique (toute position est fermée quand une bougie clôture dans la zone FP). Décoché = les trades de continuation (continue / crossContinue) ne sont plus fermés au retour dans la zone fair price.')
 
+// ── Évaluation prop firm : plafond de gain cumulé (distinct de la clôture au
+// profit fixe ci-dessus, qui est un TP en $ PAR trade). Déclarés en DERNIER
+// (indices in_N stables sur les graphiques existants).
+grpEval = 'Évaluation prop firm'
+evalAccount = input.bool(false, "Compte d'évaluation (plafonner le gain cumulé)", group=grpEval, tooltip="À cocher UNIQUEMENT pour un compte d'évaluation prop firm. Dès que le profit net cumulé atteint le plafond ci-dessous, la position est fermée (flatten de CE compte) et plus aucune nouvelle entrée n'est prise — l'objectif d'éval est sécurisé, verrouillage définitif. Les autres comptes continuent de trader indépendamment. Décoché pour un compte financé (aucun effet).")
+maxGainEval = input.float(1500, 'Plafond de gain cumulé ($)', minval=0, step=50, group=grpEval, tooltip="Profit net cumulé (strategy.netprofit) à partir duquel on arrête ce compte. 1500 $ par défaut. Sans effet si « Compte d'évaluation » est décoché.")
+
 // Appearance inputs
 showhighs        = true
 showlows         = true
@@ -830,8 +837,21 @@ whEntryShort() =>
          revTP == 'Bord proche zone FP' ? zoneHigh : openValue
     whAlert('sell', slS, whCapProfit(tpS, false))
 
+// ── Objectif d'évaluation atteint → flatten + blocage définitif ──────
+// Latch : une fois le plafond de gain cumulé franchi, on ferme la position de
+// CE compte (flatten via webhook si actif) et on bloque toutes les entrées.
+// Astuce : les 6 blocs d'entrée exigent tous « not entered » ; forcer
+// entered:=true les neutralise sans toucher à leurs conditions.
+var bool evalCapReached = false
+if evalAccount and not evalCapReached and strategy.netprofit >= maxGainEval
+    evalCapReached := true
+    strategy.cancel_all()
+    if strategy.position_size != 0
+        whAlert('flatten', float(na), float(na))
+        strategy.close_all(comment="Objectif éval atteint")
+
 // ─── TJR : entrées — confirmation acceptée jusqu'à armBars bougies après le fill ─
-bool entered = false
+bool entered = evalCapReached
 wickOkLong  = not (highWickSize > bodySize * 0.4)
 wickOkShort = not (lowWickSize > bodySize * 0.4)
 

@@ -70,6 +70,9 @@ namespace NinjaTrader.NinjaScript.Strategies
 		// comme les plots de liquidité 1H. L'affichage n'est pas repris ici,
 		// les niveaux étant portés par les ordres eux-mêmes.
 
+		// Objectif d'évaluation atteint : latch définitif (flatten + blocage).
+		private bool evalCapReached = false;
+
 		#endregion
 
 		#region Paramètres
@@ -141,6 +144,15 @@ namespace NinjaTrader.NinjaScript.Strategies
 		[Display(Name = "Dessiner les signaux sur le graphique", Order = 40, GroupName = "5. Affichage")]
 		public bool ShowSignals { get; set; }
 
+		[NinjaScriptProperty]
+		[Display(Name = "Compte d'évaluation (plafonner le gain cumulé)", Order = 50, GroupName = "6. Évaluation prop firm")]
+		public bool EvalAccount { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0.0, double.MaxValue)]
+		[Display(Name = "Plafond de gain cumulé ($)", Order = 51, GroupName = "6. Évaluation prop firm")]
+		public double MaxGainEval { get; set; }
+
 		#endregion
 
 		protected override void OnStateChange()
@@ -178,6 +190,8 @@ namespace NinjaTrader.NinjaScript.Strategies
 				EodCutoffMinute		= 30;
 				EodReopenHour		= 23;
 				ShowSignals			= true;
+				EvalAccount			= false;
+				MaxGainEval			= 1500;
 			}
 			else if (State == State.Configure)
 			{
@@ -377,6 +391,25 @@ namespace NinjaTrader.NinjaScript.Strategies
 			// close qu'à partir de la bougie suivante du chart).
 			bool apresSetup = Time[0] > setupH1Time;
 
+			// ═══ Objectif d'évaluation atteint → flatten + blocage définitif ══
+			// Plafond de gain CUMULÉ (réalisé + latent) pour un compte d'éval :
+			// une fois franchi, on solde la position de CE compte et plus aucune
+			// entrée n'est prise (verrouillage définitif). Les autres comptes
+			// continuent de trader indépendamment.
+			if (EvalAccount && !evalCapReached)
+			{
+				double cumProfit = SystemPerformance.AllTrades.TradesPerformance.Currency.CumProfit;
+				if (positionSize != 0)
+					cumProfit += Position.GetUnrealizedProfitLoss(PerformanceUnit.Currency, Close[0]);
+
+				if (cumProfit >= MaxGainEval)
+				{
+					evalCapReached = true;
+					if (positionSize > 0) ExitLong("Objectif éval", "Long");
+					if (positionSize < 0) ExitShort("Objectif éval", "Short");
+				}
+			}
+
 			// ═══ ENTRÉES ═════════════════════════════════════════════════════
 			// Écart avec Pine : le script tourne en process_orders_on_close, donc
 			// l'entrée est remplie AU CLOSE de la bougie FVG. NinjaTrader remplit
@@ -385,7 +418,7 @@ namespace NinjaTrader.NinjaScript.Strategies
 			// comme en Pine : seul le prix d'entrée réel peut différer, ce qui
 			// décale légèrement le RR effectif par rapport au backtest
 			// TradingView.
-			if (positionSize == 0 && pendingDir == 1 && bullFVG && apresSetup && !eodFlatten)
+			if (positionSize == 0 && pendingDir == 1 && bullFVG && apresSetup && !eodFlatten && !evalCapReached)
 			{
 				double entryPrice	= Close[0];
 				double stopPrice	= fvgLowestLow - stopDistance;
@@ -405,7 +438,7 @@ namespace NinjaTrader.NinjaScript.Strategies
 				pendingDir = 0;
 			}
 
-			if (positionSize == 0 && pendingDir == -1 && bearFVG && apresSetup && !eodFlatten)
+			if (positionSize == 0 && pendingDir == -1 && bearFVG && apresSetup && !eodFlatten && !evalCapReached)
 			{
 				double entryPrice	= Close[0];
 				double stopPrice	= fvgHighestHigh + stopDistance;

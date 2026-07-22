@@ -76,12 +76,6 @@ i_news28 = input.bool(false, "28", group="📅 News 14h30 (jour du mois)", inlin
 i_news29 = input.bool(false, "29", group="📅 News 14h30 (jour du mois)", inline="n3")
 i_news30 = input.bool(false, "30", group="📅 News 14h30 (jour du mois)", inline="n3")
 
-// ─── Évaluation prop firm : plafond de gain cumulé ────────────────────────────
-// Déclarés en DERNIER (indices in_N stables sur les graphiques existants).
-grpEval = "Évaluation prop firm"
-i_evalAccount = input.bool(false, "Compte d'évaluation (plafonner le gain cumulé)", group=grpEval, tooltip="À cocher UNIQUEMENT pour un compte d'évaluation prop firm. Dès que le profit net cumulé atteint le plafond ci-dessous, la position est fermée (flatten) et plus aucune nouvelle entrée n'est prise — l'objectif d'éval est sécurisé, verrouillage définitif. Décoché pour un compte financé (aucun effet).")
-i_maxGainEval = input.float(1500, "Plafond de gain cumulé ($)", minval=0, step=50, group=grpEval, tooltip="Profit net cumulé (strategy.netprofit) à partir duquel on arrête ce compte. 1500 $ par défaut. Sans effet si « Compte d'évaluation » est décoché.")
-
 // ─────────────────────────────────────────────────────────
 // TIME  (CET = Europe/Paris)
 // ─────────────────────────────────────────────────────────
@@ -257,18 +251,7 @@ if shortTime
 
 tooMuchWick    = pushWick > bodySize * 0.4
 tooCloseOfMean = high >= zoneLow - buffer and low <= zoneHigh + buffer
-
-// ── Objectif d'évaluation atteint → flatten + blocage définitif ──────
-// Latch : une fois le plafond de gain cumulé franchi, on ferme la position et
-// on bloque toute nouvelle entrée (canTrade est requis par les 4 blocs d'entrée).
-var bool evalCapReached = false
-if i_evalAccount and not evalCapReached and strategy.netprofit >= i_maxGainEval
-    evalCapReached := true
-    strategy.cancel_all()
-    if strategy.position_size != 0
-        strategy.close_all(comment="Objectif éval atteint")
-
-canTrade       = not tooCloseOfMean and not evalCapReached
+canTrade       = not tooCloseOfMean
 
 checkWick   = not tooMuchWick
 checkTrades = sv_trades < i_maxTrades

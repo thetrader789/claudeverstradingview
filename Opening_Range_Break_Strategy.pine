@@ -73,6 +73,14 @@ useWebhook = input.bool(false, "Alertes webhook JSON", group=grpWebhook)
 whSecret   = input.string("CHANGE_ME", "Secret partagé", group=grpWebhook, tooltip="Doit correspondre au secret attendu par le serveur FastAPI")
 whStrat    = input.string("ORB", "Identifiant stratégie", group=grpWebhook)
 
+// ── Évaluation prop firm : plafond de gain cumulé ────────────────────
+// Déclarés en DERNIER (indices in_N stables sur les graphiques existants).
+grpEval = "Évaluation prop firm"
+evalAccount = input.bool(false, "Compte d'évaluation (plafonner le gain cumulé)", group=grpEval,
+     tooltip="À cocher UNIQUEMENT pour un compte d'évaluation prop firm. Dès que le profit net cumulé atteint le plafond ci-dessous, la position est fermée (flatten de CE compte) et plus aucune nouvelle entrée n'est prise — l'objectif d'éval est sécurisé, verrouillage définitif. Les autres comptes continuent de trader indépendamment. Décoché pour un compte financé (aucun effet).")
+maxGainEval = input.float(1500, "Plafond de gain cumulé ($)", minval=0, step=50, group=grpEval,
+     tooltip="Profit net cumulé (strategy.netprofit) à partir duquel on arrête ce compte. 1500 $ par défaut. Sans effet si « Compte d'évaluation » est décoché.")
+
 whNum(float v) =>
     na(v) ? 'null' : str.tostring(math.round_to_mintick(v))
 
@@ -290,6 +298,21 @@ if eodFlatten
         strategy.close_all(comment="Flatten fin de journée")
 
 // ============================================================================
+// 5bis) OBJECTIF D'ÉVALUATION ATTEINT → flatten + blocage définitif
+//    Latch : une fois le plafond de gain cumulé franchi, on ferme la position
+//    de CE compte (flatten via webhook si actif) et on verrouille toute
+//    nouvelle entrée (via evalCapReached dans firstBreakoutCheck). Les autres
+//    comptes (autres stratégies/webhooks) continuent de trader.
+// ============================================================================
+var bool evalCapReached = false
+if evalAccount and not evalCapReached and strategy.netprofit >= maxGainEval
+    evalCapReached := true
+    strategy.cancel_all()
+    if strategy.position_size != 0
+        whAlert('flatten', float(na), float(na))
+        strategy.close_all(comment="Objectif éval atteint")
+
+// ============================================================================
 // 6) DÉTECTION DU BREAKOUT — clôture 5m qui CASSE l'opening range
 //    Le signal est le franchissement (clôture précédente dans le range,
 //    clôture courante dehors), pas le simple fait d'être hors du range :
@@ -299,7 +322,7 @@ if eodFlatten
 //    Après un refus, il faut que le prix réintègre le range et re-casse
 //    pour générer un nouveau signal.
 // ============================================================================
-firstBreakoutCheck = not inSession and orLocked and not breakoutDoneToday and not sessionWinLock and canTradeToday and not eodFlatten and withinTradingWindow
+firstBreakoutCheck = not inSession and orLocked and not breakoutDoneToday and not sessionWinLock and canTradeToday and not eodFlatten and withinTradingWindow and not evalCapReached
 crossedAboveOR = close > orHigh and close[1] <= orHigh
 crossedBelowOR = close < orLow  and close[1] >= orLow
 longBreakout  = firstBreakoutCheck and crossedAboveOR and orLongsAllowed

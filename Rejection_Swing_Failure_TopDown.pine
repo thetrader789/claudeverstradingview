@@ -61,6 +61,14 @@ eodCutoffMinute = input.int(30, "Minute de coupure", minval=0, maxval=59, group=
 eodReopenHour   = input.int(23, "Réouverture Globex (Paris)", minval=0, maxval=23, group=grpEOD,
      tooltip="Fin de la fenêtre de coupure. Le Globex clôture à 22h00 Paris et rouvre à 23h00 : la nouvelle séance appartient au jour de trading suivant, les entrées y sont de nouveau autorisées.")
 
+// ── Évaluation prop firm : plafond de gain cumulé ────────────────────
+// Déclarés en DERNIER (indices in_N stables sur les graphiques existants).
+grpEval = "Évaluation prop firm"
+evalAccount = input.bool(false, "Compte d'évaluation (plafonner le gain cumulé)", group=grpEval,
+     tooltip="À cocher UNIQUEMENT pour un compte d'évaluation prop firm. Dès que le profit net cumulé atteint le plafond ci-dessous, la position est fermée (flatten de CE compte) et plus aucune nouvelle entrée n'est prise — l'objectif d'éval est sécurisé, verrouillage définitif. Les autres comptes continuent de trader indépendamment. Décoché pour un compte financé (aucun effet).")
+maxGainEval = input.float(1500, "Plafond de gain cumulé ($)", minval=0, step=50, group=grpEval,
+     tooltip="Profit net cumulé (strategy.netprofit) à partir duquel on arrête ce compte. 1500 $ par défaut. Sans effet si « Compte d'évaluation » est décoché.")
+
 whNum(float v) =>
     na(v) ? 'null' : str.tostring(math.round_to_mintick(v))
 
@@ -240,7 +248,19 @@ var float activeTp = na
 
 // Les entrées elles-mêmes sont bloquées pendant la fenêtre de coupure : un
 // setup armé avant 21h30 ne doit pas déclencher d'entrée FVG après.
-if strategy.position_size == 0 and pendingDir == 1 and bullFVG and not eodFlatten
+// ── Objectif d'évaluation atteint → flatten + blocage définitif ──────
+// Latch : une fois le plafond de gain cumulé franchi, on ferme la position
+// de CE compte (flatten via webhook si actif) et on verrouille toute nouvelle
+// entrée. Les autres comptes continuent de trader indépendamment.
+var bool evalCapReached = false
+if evalAccount and not evalCapReached and strategy.netprofit >= maxGainEval
+    evalCapReached := true
+    strategy.cancel_all()
+    if strategy.position_size != 0
+        whAlert('flatten', float(na), float(na))
+        strategy.close_all(comment="Objectif éval atteint")
+
+if strategy.position_size == 0 and pendingDir == 1 and bullFVG and not eodFlatten and not evalCapReached
     entryPrice = close
     stopPrice  = fvgLowestLow - stopDistance
     target     = useSwingTP ? nearestSwingAbove(entryPrice) : pendingTarget
@@ -259,7 +279,7 @@ if strategy.position_size == 0 and pendingDir == 1 and bullFVG and not eodFlatte
               " | TP " + str.tostring(target, format.mintick), alert.freq_once_per_bar_close)
     pendingDir := 0
 
-if strategy.position_size == 0 and pendingDir == -1 and bearFVG and not eodFlatten
+if strategy.position_size == 0 and pendingDir == -1 and bearFVG and not eodFlatten and not evalCapReached
     entryPrice = close
     stopPrice  = fvgHighestHigh + stopDistance
     target     = useSwingTP ? nearestSwingBelow(entryPrice) : pendingTarget

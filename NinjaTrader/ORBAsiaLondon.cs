@@ -109,6 +109,9 @@ namespace NinjaTrader.NinjaScript.Strategies
 
 		private bool inSessionPrev	= false;
 
+		// Objectif d'évaluation atteint : latch définitif (flatten + blocage).
+		private bool evalCapReached	= false;
+
 		#endregion
 
 		#region Paramètres
@@ -214,6 +217,15 @@ namespace NinjaTrader.NinjaScript.Strategies
 		[Display(Name = "Dessiner l'opening range", Order = 50, GroupName = "5. Affichage")]
 		public bool ShowVisuals { get; set; }
 
+		[NinjaScriptProperty]
+		[Display(Name = "Compte d'évaluation (plafonner le gain cumulé)", Order = 60, GroupName = "6. Évaluation prop firm")]
+		public bool EvalAccount { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0.0, double.MaxValue)]
+		[Display(Name = "Plafond de gain cumulé ($)", Order = 61, GroupName = "6. Évaluation prop firm")]
+		public double MaxGainEval { get; set; }
+
 		#endregion
 
 		protected override void OnStateChange()
@@ -264,6 +276,8 @@ namespace NinjaTrader.NinjaScript.Strategies
 				FlattenHour				= 17;
 				FlattenMinute			= 45;
 				ShowVisuals				= true;
+				EvalAccount				= false;
+				MaxGainEval				= 1500;
 			}
 			else if (State == State.Configure)
 			{
@@ -552,9 +566,30 @@ namespace NinjaTrader.NinjaScript.Strategies
 				if (positionSize < 0) ExitShort();
 			}
 
+			// ═══ 5bis) OBJECTIF D'ÉVALUATION ATTEINT → flatten + blocage ═════
+			// Plafond de gain CUMULÉ (réalisé + latent) pour un compte d'éval :
+			// une fois franchi, on solde la position de CE compte et plus aucune
+			// entrée n'est prise (verrouillage définitif via evalCapReached, qui
+			// gate firstBreakoutCheck — donc marché ET retest). Les autres comptes
+			// continuent de trader indépendamment.
+			if (EvalAccount && !evalCapReached)
+			{
+				double cumProfit = SystemPerformance.AllTrades.TradesPerformance.Currency.CumProfit;
+				if (positionSize != 0)
+					cumProfit += Position.GetUnrealizedProfitLoss(PerformanceUnit.Currency, Close[0]);
+
+				if (cumProfit >= MaxGainEval)
+				{
+					evalCapReached = true;
+					CancelPendingRetest();
+					if (positionSize > 0) ExitLong();
+					if (positionSize < 0) ExitShort();
+				}
+			}
+
 			// ═══ 6) DÉTECTION DU BREAKOUT ════════════════════════════════════
 			bool firstBreakoutCheck = !inSession && orLocked && !breakoutDoneToday && !sessionWinLock
-								   && canTradeToday && !eodFlatten && withinTradingWindow;
+								   && canTradeToday && !eodFlatten && withinTradingWindow && !evalCapReached;
 
 			bool crossedAboveOR = Close[0] > orHigh && Close[1] <= orHigh;
 			bool crossedBelowOR = Close[0] < orLow  && Close[1] >= orLow;

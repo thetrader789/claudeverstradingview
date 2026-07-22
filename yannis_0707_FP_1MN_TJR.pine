@@ -424,6 +424,12 @@ debugRearm       = input.bool(false, 'Debug re-entrées (table échecs filtres)'
 hidefilled       = input.bool(false, 'Hide Filled', group='Conditions')
 voltresh = input.int(0, 'Volume >', group='Conditions')
 
+// ── Évaluation prop firm : plafond de gain cumulé ────────────────────
+// Déclarés en DERNIER (indices in_N stables sur les graphiques existants).
+grpEval = 'Évaluation prop firm'
+evalAccount = input.bool(false, "Compte d'évaluation (plafonner le gain cumulé)", group=grpEval, tooltip="À cocher UNIQUEMENT pour un compte d'évaluation prop firm. Dès que le profit net cumulé atteint le plafond ci-dessous, la position est fermée (flatten) et plus aucune nouvelle entrée n'est prise — l'objectif d'éval est sécurisé, verrouillage définitif. Décoché pour un compte financé (aucun effet).")
+maxGainEval = input.float(1500, 'Plafond de gain cumulé ($)', minval=0, step=50, group=grpEval, tooltip="Profit net cumulé (strategy.netprofit) à partir duquel on arrête ce compte. 1500 $ par défaut. Sans effet si « Compte d'évaluation » est décoché.")
+
 // Appearance inputs
 showhighs        = true
 showlows         = true
@@ -724,8 +730,19 @@ riskShortNow = math.min(math.max(structStopShortLvl - close, minStopPts), maxSto
 rrLongOk  = useStructStop ? (openValue - close) >= riskLongNow  * minRR : (openValue - close) >= sp
 rrShortOk = useStructStop ? (close - openValue) >= riskShortNow * minRR : (close - openValue) >= sp
 
+// ── Objectif d'évaluation atteint → flatten + blocage définitif ──────
+// Latch : une fois le plafond de gain cumulé franchi, on ferme la position et
+// on bloque toutes les entrées. Astuce : les 6 blocs d'entrée exigent tous
+// « not entered » ; initialiser entered à true les neutralise.
+var bool evalCapReached = false
+if evalAccount and not evalCapReached and strategy.netprofit >= maxGainEval
+    evalCapReached := true
+    strategy.cancel_all()
+    if strategy.position_size != 0
+        strategy.close_all(comment="Objectif éval atteint")
+
 // ─── TJR : entrées — confirmation acceptée jusqu'à armBars bougies après le fill ─
-bool entered = false
+bool entered = evalCapReached
 wickOkLong  = not (highWickSize > bodySize * 0.4)
 wickOkShort = not (lowWickSize > bodySize * 0.4)
 

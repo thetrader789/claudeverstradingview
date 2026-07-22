@@ -128,6 +128,8 @@ namespace NinjaTrader.NinjaScript.Strategies
 		private bool   muchSell			= false;
 		private bool   muchBuy			= false;
 		private bool   continuePeriod	= true;
+		// Objectif d'évaluation atteint : latch définitif (flatten + blocage).
+		private bool   evalCapReached	= false;
 		private string tradeType		= "";
 
 		private double pushWickSize		= double.NaN;
@@ -398,6 +400,15 @@ namespace NinjaTrader.NinjaScript.Strategies
 		[Display(Name = "Multiplicateur bandes ATR", Order = 77, GroupName = "6. Gestion trade")]
 		public double M { get; set; }
 
+		[NinjaScriptProperty]
+		[Display(Name = "Compte d'évaluation (plafonner le gain cumulé)", Order = 80, GroupName = "7. Évaluation prop firm")]
+		public bool EvalAccount { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(0.0, double.MaxValue)]
+		[Display(Name = "Plafond de gain cumulé ($)", Order = 81, GroupName = "7. Évaluation prop firm")]
+		public double MaxGainEval { get; set; }
+
 		#endregion
 
 		protected override void OnStateChange()
@@ -463,6 +474,8 @@ namespace NinjaTrader.NinjaScript.Strategies
 				ProfitCloseUsd			= 5000;
 				UseFpCloseCont			= true;
 				M						= 1.5;
+				EvalAccount				= false;
+				MaxGainEval				= 1500;
 			}
 			else if (State == State.Configure)
 			{
@@ -1011,7 +1024,26 @@ namespace NinjaTrader.NinjaScript.Strategies
 			bool wickOkLong		= !(highWickSize > bodySize * 0.4);
 			bool wickOkShort	= !(lowWickSize  > bodySize * 0.4);
 
-			bool entered	= false;
+			// ═══ Objectif d'évaluation atteint → flatten + blocage définitif ══
+			// Plafond de gain CUMULÉ (réalisé + latent) pour un compte d'éval :
+			// une fois franchi, on solde la position de CE compte et plus aucune
+			// entrée n'est prise. Astuce : les 6 blocs d'entrée exigent tous
+			// « !entered » ; initialiser entered à true les neutralise.
+			if (EvalAccount && !evalCapReached)
+			{
+				double cumProfit = SystemPerformance.AllTrades.TradesPerformance.Currency.CumProfit;
+				if (positionSize != 0)
+					cumProfit += Position.GetUnrealizedProfitLoss(PerformanceUnit.Currency, Close[0]);
+
+				if (cumProfit >= MaxGainEval)
+				{
+					evalCapReached = true;
+					if (positionSize > 0) ExitLong("Objectif éval", "Long");
+					if (positionSize < 0) ExitShort("Objectif éval", "Short");
+				}
+			}
+
+			bool entered	= evalCapReached;
 			bool flat		= positionSize == 0 && !HasPendingEntry();
 
 			// ═══ Entrées ═════════════════════════════════════════════════════
