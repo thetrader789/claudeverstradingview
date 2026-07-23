@@ -37,6 +37,20 @@ evalAccount = input.bool(false, "Compte d'évaluation (plafonner le gain cumulé
 maxGainEval = input.float(1500, "Plafond de gain cumulé ($)", minval=0, step=50, group=grpEval,
      tooltip="Profit net cumulé (strategy.netprofit) à partir duquel on arrête ce compte. 1500 $ par défaut. Sans effet si « Compte d'évaluation » est décoché.")
 
+// ── Break-even + Trailing stop ───────────────────────────────────────
+// Déclarés en DERNIER (indices in_N stables). Objectif : capturer le run-up
+// au lieu de le rendre au flatten EOD, puisque le TP (pivot Daily opposé) est
+// souvent trop loin pour être atteint intraday.
+grpTrail = "Break-even & Trailing"
+useBE       = input.bool(true, "Break-even au seuil", group=grpTrail,
+     tooltip="Dès que le trade atteint le seuil (en R) ci-dessous, le stop est remonté au prix d'entrée (perte impossible ensuite).")
+useTrail    = input.bool(true, "Trailing stop ATR après le seuil", group=grpTrail,
+     tooltip="Une fois le seuil atteint, le stop suit le prix à trailMult × ATR (jamais en arrière).")
+trailStartR = input.float(1.0, "Seuil d'activation (en R)", minval=0.1, step=0.1, group=grpTrail,
+     tooltip="Profit en multiples du risque initial (1R = distance entrée→stop) à partir duquel break-even + trailing s'activent.")
+trailMult   = input.float(1.5, "Trailing = ATR ×", minval=0.1, step=0.1, group=grpTrail,
+     tooltip="Distance du trailing stop sous (long) / au-dessus (short) la clôture, en multiples d'ATR.")
+
 whNum(float v) =>
     na(v) ? 'null' : str.tostring(math.round_to_mintick(v))
 
@@ -142,6 +156,13 @@ stopDistance = useATRStop ? atrVal * atrMult : stopOffset
 // ============================================================================
 // 5) ENTRY LOGIC — entry at close of the FVG candle
 // ============================================================================
+// État du stop géré (break-even + trailing) sur la position ouverte.
+var float activeStop  = na    // stop courant, remonté par le BE puis le trailing
+var float activeTp    = na    // TP figé à l'entrée (pivot Daily opposé), gardé pour re-poser l'exit
+var float entryRef    = na    // prix d'entrée mémorisé
+var float initialRisk = na    // 1R en points (distance entrée → stop initial)
+var int   posDir      = 0     // 1 = long, -1 = short (pour le trailing)
+
 // ── Objectif d'évaluation atteint → flatten + blocage définitif ──────
 // Latch : une fois le plafond de gain cumulé franchi, on ferme la position
 // de CE compte (flatten via webhook si actif) et on verrouille toute nouvelle
@@ -165,6 +186,11 @@ if strategy.position_size == 0 and pendingDir == 1 and bullFVG and not evalCapRe
     if risk > 0 and not na(target) and rr >= minRR
         strategy.entry("Long", strategy.long, comment="RSF Long")
         strategy.exit("Long Exit", from_entry="Long", stop=stopPrice, limit=target)
+        activeStop  := stopPrice
+        activeTp    := target
+        entryRef    := entryPrice
+        initialRisk := entryPrice - stopPrice
+        posDir      := 1
         whAlert('buy', stopPrice, target)
         if not useWebhook
             alert("RSF-TD LONG @ " + str.tostring(entryPrice, format.mintick) +
@@ -183,6 +209,11 @@ if strategy.position_size == 0 and pendingDir == -1 and bearFVG and not evalCapR
     if risk > 0 and not na(target) and rr >= minRR
         strategy.entry("Short", strategy.short, comment="RSF Short")
         strategy.exit("Short Exit", from_entry="Short", stop=stopPrice, limit=target)
+        activeStop  := stopPrice
+        activeTp    := target
+        entryRef    := entryPrice
+        initialRisk := stopPrice - entryPrice
+        posDir      := -1
         whAlert('sell', stopPrice, target)
         if not useWebhook
             alert("RSF-TD SHORT @ " + str.tostring(entryPrice, format.mintick) +
@@ -190,17 +221,50 @@ if strategy.position_size == 0 and pendingDir == -1 and bearFVG and not evalCapR
                   " | TP " + str.tostring(target, format.mintick), alert.freq_once_per_bar_close)
     pendingDir := 0
 
+// ── Mise à jour BREAK-EVEN + TRAILING sur position ouverte ───────────
+// À chaque clôture : une fois le profit ≥ trailStartR × R, on remonte le stop
+// au break-even (entrée) puis on le fait suivre le prix à trailMult × ATR.
+// activeStop est monotone (math.max en long / math.min en short) → jamais
+// desserré. On re-pose strategy.exit avec le même id pour mettre à jour l'ordre.
+if strategy.position_size > 0 and posDir == 1 and not na(initialRisk) and initialRisk > 0
+    if close - entryRef >= trailStartR * initialRisk
+        if useBE
+            activeStop := math.max(activeStop, entryRef)
+        if useTrail
+            activeStop := math.max(activeStop, close - trailMult * atrVal)
+    strategy.exit("Long Exit", from_entry="Long", stop=activeStop, limit=activeTp)
+
+if strategy.position_size < 0 and posDir == -1 and not na(initialRisk) and initialRisk > 0
+    if entryRef - close >= trailStartR * initialRisk
+        if useBE
+            activeStop := math.min(activeStop, entryRef)
+        if useTrail
+            activeStop := math.min(activeStop, close + trailMult * atrVal)
+    strategy.exit("Short Exit", from_entry="Short", stop=activeStop, limit=activeTp)
+
 // Force-close any open position at the EOD flatten time
 if strategy.position_size != 0 and eodFlatten
     whAlert('flatten', float(na), float(na))
     strategy.close_all(comment="EOD Flatten")
     pendingDir := 0
 
+// Trade terminé → on oublie l'état du trailing (transition ouverte → flat).
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    activeStop   := na
+    activeTp     := na
+    entryRef     := na
+    initialRisk  := na
+    posDir       := 0
+
 // ============================================================================
 // VISUALS
 // ============================================================================
 plot(dPH, "Pivot High", color=color.new(color.red, 0), style=plot.style_linebr, linewidth=1)
 plot(dPL, "Pivot Low",  color=color.new(color.green, 0), style=plot.style_linebr, linewidth=1)
+
+// Stop géré (break-even / trailing) pendant le trade
+plot(strategy.position_size != 0 ? activeStop : na, "Stop géré (BE/trailing)",
+     color=color.new(color.fuchsia, 0), style=plot.style_linebr, linewidth=1)
 
 plotshape(bearishSetup, title="Bearish Setup (waiting FVG)", style=shape.triangledown,
      location=location.abovebar, color=color.red, size=size.small)
